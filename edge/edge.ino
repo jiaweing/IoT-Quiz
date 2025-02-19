@@ -10,7 +10,6 @@ const char* password = "XXXXXXXX";   // Replace with your WiFi password
 const char* mqtt_server = "192.168.1.242"; // Replace with your server IP
 const int mqtt_port = 1883;  // Standard MQTT port instead of WebSocket
 const char* mqtt_topic = "sensor/accelerometer";
-const char* mqtt_status_topic = "sensor/status";
 const char* mqtt_client_count_topic = "system/client_count";
 
 // Generate a random client ID
@@ -50,20 +49,19 @@ void callback(char* topic, byte* payload, unsigned int length) {
   memcpy(message, payload, min(length, sizeof(message) - 1));
   message[min(length, sizeof(message) - 1)] = '\0';
   
-  if (strcmp(topic, mqtt_status_topic) == 0) {
-    logMessage(message, 3); // Display on line 3
-    M5.Lcd.fillRect(120, 0, 15, 15, BLUE); // Show blue indicator for received message
-    delay(100); // Brief delay
-    M5.Lcd.fillRect(120, 0, 15, 15, GREEN); // Return to green
-  }
-  else if (strcmp(topic, mqtt_client_count_topic) == 0) {
+  if (strcmp(topic, mqtt_client_count_topic) == 0) {
     char buf[32];
     snprintf(buf, sizeof(buf), "Clients: %s", message);
-    logMessage(buf, 6); // Display on line 6
+    logMessage(buf, 5);
+    M5.Lcd.fillRect(120, 0, 15, 15, BLUE); // Show blue indicator for client count update
+    delay(100);
+    M5.Lcd.fillRect(120, 0, 15, 15, GREEN);
   }
 }
 
 void setup_wifi() {
+  // Clear status area and show connecting state
+  M5.Lcd.fillRect(120, 0, 15, 15, BLACK);
   WiFi.begin(ssid, password);
   
   int dots = 0;
@@ -74,9 +72,12 @@ void setup_wifi() {
     for(int i = 0; i < dots; i++) M5.Lcd.print(".");
     dots = (dots + 1) % 4;
   }
-
-  logMessage("WiFi OK!", 7);
-  logMessage(WiFi.localIP().toString().c_str(), 8);
+  
+  // Clear connection animation and show connected state
+  clearLine(0);
+  logMessage("WiFi OK!", 0);
+  logMessage(WiFi.localIP().toString().c_str(), 1);
+  M5.Lcd.fillRect(120, 0, 15, 15, GREEN);
 }
 
 void reconnect() {
@@ -88,7 +89,6 @@ void reconnect() {
     if (client.connect(mqtt_client_id.c_str())) {
       logMessage("MQTT OK!", 2);
       // Subscribe to topics
-      client.subscribe(mqtt_status_topic);
       client.subscribe(mqtt_client_count_topic);
       break;
     } else {
@@ -113,7 +113,7 @@ void setup() {
   // Display client ID
   char idBuf[32];
   snprintf(idBuf, sizeof(idBuf), "ID: %s", mqtt_client_id.c_str());
-  logMessage(idBuf, 1);  // Display on line 1
+  logMessage(idBuf, 3);  // Move ID to line 3
   
   setup_wifi();
   client.setServer(mqtt_server, mqtt_port);
@@ -145,17 +145,17 @@ void loop() {
     if (client.connected()) {
       if (client.publish(mqtt_topic, msg)) {
         // Update display with latest values and success indicator
-        clearLine(4);
-        clearLine(5);
-        M5.Lcd.setCursor(0, 48);
+        clearLine(6);
+        clearLine(7);
+        M5.Lcd.setCursor(0, 72);  // Move accelerometer data down with gap
         M5.Lcd.printf("X:%.1f Y:%.1f", accX, accY);
-        M5.Lcd.setCursor(0, 60);
+        M5.Lcd.setCursor(0, 84);
         M5.Lcd.printf("Z:%.1f", accZ);
         
         // Show success indicator
         M5.Lcd.fillRect(120, 0, 15, 15, GREEN);
       } else {
-        logMessage("Pub failed", 4);
+        logMessage("Pub failed", 6);
         // Show failure indicator
         M5.Lcd.fillRect(120, 0, 15, 15, RED);
       }

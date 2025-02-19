@@ -118,13 +118,6 @@ broker.on("publish", (packet: PublishPacket, client: Client | null) => {
         payload: packet.payload,
         qos: 0,
       });
-
-      // Send acknowledgment back to the device
-      broker.publish({
-        topic: "sensor/status",
-        payload: Buffer.from("Data received"),
-        qos: 0,
-      });
     } catch (error) {
       console.error("Error parsing sensor data:", error);
     }
