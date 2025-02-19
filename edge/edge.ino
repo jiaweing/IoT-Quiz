@@ -50,8 +50,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
   message[min(length, sizeof(message) - 1)] = '\0';
   
   if (strcmp(topic, mqtt_client_count_topic) == 0) {
+    int count = atoi(message);
     char buf[32];
-    snprintf(buf, sizeof(buf), "Clients: %s", message);
+    snprintf(buf, sizeof(buf), "Clients: %d", count);
     logMessage(buf, 5);
     M5.Lcd.fillRect(120, 0, 15, 15, BLUE); // Show blue indicator for client count update
     delay(100);
@@ -110,10 +111,11 @@ void setup() {
   // Initialize random seed for client ID generation
   randomSeed(analogRead(0));
   
-  // Display client ID
+  // Display client ID and initial client count
   char idBuf[32];
   snprintf(idBuf, sizeof(idBuf), "ID: %s", mqtt_client_id.c_str());
   logMessage(idBuf, 3);  // Move ID to line 3
+  logMessage("Clients: 0", 5); // Initialize client count display
   
   setup_wifi();
   client.setServer(mqtt_server, mqtt_port);

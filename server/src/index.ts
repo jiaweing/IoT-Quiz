@@ -79,13 +79,16 @@ broker.on("clientDisconnect", (client: Client) => {
 });
 
 function publishClientCount() {
-  // -1 for webserver
-  const count = connectedClients.size - 1;
-  broker.publish({
-    topic: "system/client_count",
-    payload: Buffer.from(count.toString()),
-    qos: 0,
-  });
+  // Add a small delay before publishing to ensure client is fully connected
+  setTimeout(() => {
+    // -1 for webserver
+    const count = connectedClients.size - 1;
+    broker.publish({
+      topic: "system/client_count",
+      payload: Buffer.from(count.toString()),
+      qos: 0,
+    });
+  }, 500); // 500ms delay
 }
 
 // Handle all incoming messages and logging
