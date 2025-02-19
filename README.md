@@ -199,7 +199,7 @@ erDiagram
    ```
 
 5. **Flash M5StickC Plus**
-   - Open `edge/edge.ino` in Arduino IDE
+   - Open `client/client.ino` in Arduino IDE
    - Configure WiFi credentials
    - Upload to device
 
@@ -245,8 +245,8 @@ IoT/
 │   └── public/       # Static assets
 ├── server/           # MQTT broker and quiz logic
 │   └── src/         # Server source code
-└── edge/            # M5StickC Plus code
-    └── edge.ino     # Arduino sketch
+└── client/            # M5StickC Plus code
+    └── client.ino     # Arduino sketch
 ```
 
 ### Database Schema
