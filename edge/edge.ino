@@ -9,9 +9,20 @@ const char* password = "XXXXXXXX";   // Replace with your WiFi password
 // MQTT Broker settings
 const char* mqtt_server = "192.168.1.242"; // Replace with your server IP
 const int mqtt_port = 1883;  // Standard MQTT port instead of WebSocket
-const char* mqtt_client_id = "m5stick_sensor";
 const char* mqtt_topic = "sensor/accelerometer";
 const char* mqtt_status_topic = "sensor/status";
+const char* mqtt_client_count_topic = "system/client_count";
+
+// Generate a random client ID
+String getRandomClientId() {
+  String id = "m5stick_";
+  for(int i = 0; i < 4; i++) {
+    id += String(random(0xF), HEX);
+  }
+  return id;
+}
+
+const String mqtt_client_id = getRandomClientId();
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -39,12 +50,16 @@ void callback(char* topic, byte* payload, unsigned int length) {
   memcpy(message, payload, min(length, sizeof(message) - 1));
   message[min(length, sizeof(message) - 1)] = '\0';
   
-  // Display received message
   if (strcmp(topic, mqtt_status_topic) == 0) {
     logMessage(message, 3); // Display on line 3
     M5.Lcd.fillRect(120, 0, 15, 15, BLUE); // Show blue indicator for received message
     delay(100); // Brief delay
     M5.Lcd.fillRect(120, 0, 15, 15, GREEN); // Return to green
+  }
+  else if (strcmp(topic, mqtt_client_count_topic) == 0) {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "Clients: %s", message);
+    logMessage(buf, 6); // Display on line 6
   }
 }
 
@@ -60,8 +75,8 @@ void setup_wifi() {
     dots = (dots + 1) % 4;
   }
 
-  logMessage("WiFi OK!", 0);
-  logMessage(WiFi.localIP().toString().c_str(), 1);
+  logMessage("WiFi OK!", 7);
+  logMessage(WiFi.localIP().toString().c_str(), 8);
 }
 
 void reconnect() {
@@ -70,10 +85,11 @@ void reconnect() {
     attempts++;
     logMessage("MQTT connecting...", 2);
     
-    if (client.connect(mqtt_client_id)) {
+    if (client.connect(mqtt_client_id.c_str())) {
       logMessage("MQTT OK!", 2);
-      // Subscribe to status topic
+      // Subscribe to topics
       client.subscribe(mqtt_status_topic);
+      client.subscribe(mqtt_client_count_topic);
       break;
     } else {
       char buf[32];
@@ -90,6 +106,14 @@ void setup() {
   M5.Lcd.setRotation(3);
   M5.Lcd.fillScreen(BLACK);
   M5.Lcd.setTextSize(1);
+  
+  // Initialize random seed for client ID generation
+  randomSeed(analogRead(0));
+  
+  // Display client ID
+  char idBuf[32];
+  snprintf(idBuf, sizeof(idBuf), "ID: %s", mqtt_client_id.c_str());
+  logMessage(idBuf, 1);  // Display on line 1
   
   setup_wifi();
   client.setServer(mqtt_server, mqtt_port);

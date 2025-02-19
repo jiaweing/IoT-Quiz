@@ -1,31 +1,122 @@
 import { serve } from "@hono/node-server";
-import type { AedesPublishPacket, Client } from "aedes";
+import type { Client } from "aedes";
 import { createServer } from "aedes-server-factory";
 import { Hono } from "hono";
 import net from "net";
 import os from "os";
 import { require } from "./cjs-loader.js";
 
-const app = new Hono();
-const aedes = require("aedes")();
+interface PublishPacket {
+  topic: string;
+  payload: Buffer;
+  client?: {
+    id: string;
+  };
+}
 
-// Add MQTT subscription
-aedes.subscribe(
-  "sensor/accelerometer",
-  function (packet: AedesPublishPacket, cb: () => void) {
-    console.log("Published:", packet.payload.toString());
+interface ClientData {
+  id: string;
+  ip: string;
+  lastData?: {
+    x: number;
+    y: number;
+    z: number;
+  };
+}
 
-    // Send acknowledgment back to the device
-    if (packet.topic === "sensor/accelerometer") {
-      aedes.publish({
+const app = new Hono().use("*", async (c, next) => {
+  // Add CORS headers
+  c.header("Access-Control-Allow-Origin", "*");
+  c.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  c.header("Access-Control-Allow-Headers", "Content-Type");
+
+  // Handle preflight requests
+  if (c.req.method === "OPTIONS") {
+    return new Response(null, { status: 204 });
+  }
+
+  await next();
+});
+const broker = require("aedes")();
+const connectedClients = new Map<string, ClientData>();
+
+// Track client connections
+broker.on("client", (client: Client) => {
+  // Get client IP from socket
+  let clientIp = "unknown";
+  if (client.conn) {
+    const socket = client.conn as unknown as net.Socket;
+    clientIp = socket.remoteAddress || "unknown";
+  }
+
+  connectedClients.set(client.id, { id: client.id, ip: clientIp });
+  publishClientCount();
+  console.log(`[WS] Client connected: ${client.id} from ${clientIp}`);
+});
+
+broker.on("clientDisconnect", (client: Client) => {
+  connectedClients.delete(client.id);
+  publishClientCount();
+  console.log(`[WS] Client disconnected: ${client.id}`);
+});
+
+function publishClientCount() {
+  // -1 for webserver
+  const count = connectedClients.size;
+  broker.publish({
+    topic: "system/client_count",
+    payload: Buffer.from(count.toString()),
+    qos: 0,
+  });
+}
+
+// Handle all incoming messages and logging
+broker.on("publish", (packet: PublishPacket, client: Client | null) => {
+  // Log all published messages for debugging
+  if (client) {
+    console.log("--------------------");
+    console.log(`Client ID: ${client.id}`);
+    console.log(`Topic: ${packet.topic}`);
+    console.log(`Payload: ${packet.payload.toString()}`);
+    console.log("--------------------");
+  }
+
+  // Handle accelerometer data
+  if (client && packet.topic === "sensor/accelerometer") {
+    try {
+      const data = JSON.parse(packet.payload.toString());
+      const clientId = client.id;
+
+      // Update client data
+      const clientInfo = connectedClients.get(clientId);
+      if (clientInfo) {
+        clientInfo.lastData = data;
+        connectedClients.set(clientId, clientInfo);
+      }
+
+      // Forward data to client-specific topic for WebSocket clients
+      broker.publish({
+        topic: `sensor/${clientId}/data`,
+        payload: packet.payload,
+        qos: 0,
+      });
+
+      // Send acknowledgment back to the device
+      broker.publish({
         topic: "sensor/status",
         payload: Buffer.from("Data received"),
         qos: 0,
       });
+    } catch (error) {
+      console.error("Error parsing sensor data:", error);
     }
-    if (cb) cb();
   }
-);
+});
+
+// Add HTTP endpoint for client info
+app.get("/api/clients", (c) => {
+  return c.json(Array.from(connectedClients.values()));
+});
 
 const mqttPort = 8888;
 const mqttTcpPort = 1883;
@@ -45,7 +136,7 @@ function getLocalIpAddress() {
 }
 
 // websocket mqtt server
-const httpServer = createServer(aedes, {
+const httpServer = createServer(broker, {
   ws: true,
 });
 
@@ -54,36 +145,8 @@ httpServer.listen(mqttPort, function () {
   console.log("WebSocket MQTT port:", mqttPort);
 });
 
-httpServer.on("client", (client: Client) => {
-  console.log(`Client connected: ${client.id}`);
-});
-
-httpServer.on("clientDisconnect", (client: Client) => {
-  console.log(`Client disconnected: ${client.id}`);
-});
-
-httpServer.on(
-  "publish",
-  (packet: AedesPublishPacket, client: Client | null) => {
-    if (client) {
-      console.log("--------------------");
-      console.log(`Client ID: ${client.id}`);
-      console.log(`Topic: ${packet.topic}`);
-      console.log(`Payload: ${packet.payload.toString()}`);
-      console.log(
-        `Raw packet: ${JSON.stringify(
-          { ...packet, payload: packet.payload.toString() },
-          null,
-          2
-        )}`
-      );
-      console.log("--------------------");
-    }
-  }
-);
-
 // tcp mqtt server
-const tcpServer = net.createServer(aedes.handle);
+const tcpServer = net.createServer(broker.handle);
 tcpServer.listen(mqttTcpPort, function () {
   const localIp = getLocalIpAddress();
   console.log("[TCP] MQTT server listening on", localIp + ":" + mqttTcpPort);
@@ -91,7 +154,7 @@ tcpServer.listen(mqttTcpPort, function () {
 
 tcpServer.on("connection", (socket) => {
   console.log("[TCP] New client connection from:", socket.remoteAddress);
-  console.log("[TCP] Total clients:", aedes.connectedClients);
+  console.log("[TCP] Total clients:", broker.connectedClients);
 });
 
 tcpServer.on("close", () => {
