@@ -1,6 +1,6 @@
 # IoT Quiz System
 
-A real-time interactive quiz system powered by M5StickC Plus devices and Next.js. Perfect for classrooms, events, and interactive learning sessions.
+A real-time interactive quiz system powered by M5StickC Plus devices with MQTT and Next.js. Perfect for classrooms, events, and interactive learning sessions.
 
 ## 🌟 Features
 
