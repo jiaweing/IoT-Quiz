@@ -40,6 +40,11 @@ const app = new Hono().use("*", async (c, next) => {
 const broker = require("aedes")();
 const connectedClients = new Map<string, ClientData>();
 
+// Republish client count when websocket client connects
+broker.on("clientReady", (client: Client) => {
+  publishClientCount();
+});
+
 // Track client connections
 broker.on("client", (client: Client) => {
   // Get client IP from socket
@@ -64,12 +69,18 @@ broker.on("client", (client: Client) => {
 broker.on("clientDisconnect", (client: Client) => {
   connectedClients.delete(client.id);
   publishClientCount();
+  // Publish disconnect event
+  broker.publish({
+    topic: `system/client/${client.id}/disconnect`,
+    payload: Buffer.from(client.id),
+    qos: 0,
+  });
   console.log(`[WS] Client disconnected: ${client.id}`);
 });
 
 function publishClientCount() {
   // -1 for webserver
-  const count = connectedClients.size;
+  const count = connectedClients.size - 1;
   broker.publish({
     topic: "system/client_count",
     payload: Buffer.from(count.toString()),

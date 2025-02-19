@@ -32,6 +32,7 @@ export function useMqtt() {
           "sensor/+/data", // Client-specific data topic
           "system/client_count", // Total clients count topic
           "system/client/+/info", // Client info topic
+          "system/client/+/disconnect", // Client disconnect topic
         ],
         (err) => {
           if (err) {
@@ -62,6 +63,14 @@ export function useMqtt() {
         else if (topic === "system/client_count") {
           setTotalClients(parseInt(message.toString(), 10));
         }
+        // Handle client disconnection
+        else if (
+          topic.startsWith("system/client/") &&
+          topic.endsWith("/disconnect")
+        ) {
+          const clientId = message.toString();
+          setClients((prev) => prev.filter((c) => c.id !== clientId));
+        }
         // Handle client info updates
         else if (
           topic.startsWith("system/client/") &&
@@ -88,6 +97,7 @@ export function useMqtt() {
       .then((res) => res.json())
       .then((data) => {
         setClients(data);
+        setTotalClients(data.length);
       })
       .catch((err) => {
         console.error("Failed to fetch clients:", err);
