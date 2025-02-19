@@ -134,7 +134,7 @@ void loop() {
   client.loop();
 
   unsigned long now = millis();
-  if (now - lastMsg > 1000) {
+  // if (now - lastMsg > 1000) {
     lastMsg = now;
     
     M5.IMU.getAccelData(&accX, &accY, &accZ);
@@ -162,7 +162,7 @@ void loop() {
         M5.Lcd.fillRect(120, 0, 15, 15, RED);
       }
     }
-  }
+  // }
   
   M5.update();
 }
