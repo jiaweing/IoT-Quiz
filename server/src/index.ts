@@ -49,8 +49,15 @@ broker.on("client", (client: Client) => {
     clientIp = socket.remoteAddress || "unknown";
   }
 
-  connectedClients.set(client.id, { id: client.id, ip: clientIp });
+  const clientInfo = { id: client.id, ip: clientIp };
+  connectedClients.set(client.id, clientInfo);
   publishClientCount();
+  // Publish client info on connect
+  broker.publish({
+    topic: `system/client/${client.id}/info`,
+    payload: Buffer.from(JSON.stringify(clientInfo)),
+    qos: 0,
+  });
   console.log(`[WS] Client connected: ${client.id} from ${clientIp}`);
 });
 

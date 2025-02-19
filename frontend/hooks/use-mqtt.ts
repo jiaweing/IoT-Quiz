@@ -31,6 +31,7 @@ export function useMqtt() {
         [
           "sensor/+/data", // Client-specific data topic
           "system/client_count", // Total clients count topic
+          "system/client/+/info", // Client info topic
         ],
         (err) => {
           if (err) {
@@ -60,6 +61,22 @@ export function useMqtt() {
         // Handle total clients count
         else if (topic === "system/client_count") {
           setTotalClients(parseInt(message.toString(), 10));
+        }
+        // Handle client info updates
+        else if (
+          topic.startsWith("system/client/") &&
+          topic.endsWith("/info")
+        ) {
+          const payload = JSON.parse(message.toString());
+          setClients((prev) => {
+            const existing = prev.find((c) => c.id === payload.id);
+            if (existing) {
+              return prev.map((c) =>
+                c.id === payload.id ? { ...c, ip: payload.ip } : c
+              );
+            }
+            return [...prev, payload];
+          });
         }
       } catch (e) {
         console.error("Failed to parse message:", e);
