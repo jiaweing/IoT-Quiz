@@ -1,22 +1,18 @@
 {
-  "name": "shadcn-ui-monorepo",
-  "version": "0.0.1",
-  "private": true,
+  "name": "server",
+  "type": "module",
   "scripts": {
-    "build": "turbo build",
-    "dev": "turbo dev",
-    "lint": "turbo lint",
-    "format": "prettier --write \"**/*.{ts,tsx,md}\""
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.8",
+    "hono": "^4.7.2",
+    "aedes": "^0.51.3",
+		"aedes-server-factory": "^0.2.1"
   },
   "devDependencies": {
-    "@workspace/eslint-config": "workspace:*",
-    "@workspace/typescript-config": "workspace:*",
-    "prettier": "^3.2.5",
-    "turbo": "^2.3.0",
-    "typescript": "5.5.4"
+    "@types/node": "^20.11.17",
+    "tsx": "^4.7.1"
   },
-  "packageManager": "pnpm@9.12.3",
-  "engines": {
-    "node": ">=20"
-  }
+  "packageManager": "pnpm@9.15.0+sha512.76e2379760a4328ec4415815bcd6628dee727af3779aaa4c914e3944156c4299921a89f976381ee107d41f12cfa4b66681ca9c718f0668fa0831ed4c6d8ba56c"
 }
