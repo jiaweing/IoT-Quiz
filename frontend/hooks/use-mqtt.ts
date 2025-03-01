@@ -1,122 +1,163 @@
 import mqtt from "mqtt";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-interface AccelerometerData {
-  x: number;
-  y: number;
-  z: number;
-}
-
-interface ClientInfo {
+export interface ClientInfo {
   id: string;
   ip: string;
-  data?: AccelerometerData;
+  session?: string;
+  score?: number;
 }
+
+// Give the frontend a unique identifier
+const FRONTEND_CLIENT_ID = "frontend_dashboard";
 
 export function useMqtt() {
   const [clients, setClients] = useState<ClientInfo[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [totalClients, setTotalClients] = useState(0);
+  // New state for answer distribution (for 4 answers)
+  const [answerDistribution, setAnswerDistribution] = useState<{ [key: string]: number }>({
+  "1": 0,
+  "2": 0,
+  "3": 0,
+  "4": 0,
+});
+
+  // Persist MQTT connection across renders
+  const mqttClientRef = useRef<mqtt.MqttClient | null>(null);
 
   useEffect(() => {
-    // Connect using WebSocket
-    const mqttClient = mqtt.connect("ws://localhost:8888");
-
-    mqttClient.on("connect", () => {
-      console.log("Connected to MQTT broker");
-      setIsConnected(true);
-
-      // Subscribe to all needed topics
-      mqttClient.subscribe(
-        [
-          "sensor/+/data", // Client-specific data topic
-          "system/client_count", // Total clients count topic
-          "system/client/+/info", // Client info topic
-          "system/client/+/disconnect", // Client disconnect topic
-        ],
-        (err) => {
-          if (err) {
-            console.error("Subscription error:", err);
-          }
-        }
-      );
-    });
-
-    mqttClient.on("message", (topic, message) => {
-      try {
-        // Handle client-specific data
-        if (topic.startsWith("sensor/") && topic.endsWith("/data")) {
-          const clientId = topic.split("/")[1];
-          const payload = JSON.parse(message.toString());
-
-          setClients((prev) => {
-            const existing = prev.find((c) => c.id === clientId);
-            if (existing) {
-              return prev.map((c) =>
-                c.id === clientId ? { ...c, data: payload } : c
-              );
-            }
-            return [...prev, { id: clientId, ip: "loading...", data: payload }];
-          });
-        }
-        // Handle total clients count
-        else if (topic === "system/client_count") {
-          setTotalClients(parseInt(message.toString(), 10));
-        }
-        // Handle client disconnection
-        else if (
-          topic.startsWith("system/client/") &&
-          topic.endsWith("/disconnect")
-        ) {
-          const clientId = message.toString();
-          setClients((prev) => prev.filter((c) => c.id !== clientId));
-        }
-        // Handle client info updates
-        else if (
-          topic.startsWith("system/client/") &&
-          topic.endsWith("/info")
-        ) {
-          const payload = JSON.parse(message.toString());
-          setClients((prev) => {
-            const existing = prev.find((c) => c.id === payload.id);
-            if (existing) {
-              return prev.map((c) =>
-                c.id === payload.id ? { ...c, ip: payload.ip } : c
-              );
-            }
-            return [...prev, payload];
-          });
-        }
-      } catch (e) {
-        console.error("Failed to parse message:", e);
-      }
-    });
-
-    // Fetch initial clients list
-    fetch("http://localhost:3001/api/clients")
-      .then((res) => res.json())
-      .then((data) => {
-        setClients(data);
-        setTotalClients(data.length);
-      })
-      .catch((err) => {
-        console.error("Failed to fetch clients:", err);
+    if (!mqttClientRef.current) {
+      mqttClientRef.current = mqtt.connect("ws://localhost:8888", {
+        clientId: FRONTEND_CLIENT_ID,
+        clean: false,
+        reconnectPeriod: 5000,
+        keepalive: 60,
       });
 
-    mqttClient.on("error", (err) => {
-      console.error("MQTT error:", err);
-      setIsConnected(false);
-    });
+      mqttClientRef.current.on("connect", () => {
+        console.log(`Connected to MQTT broker as ${FRONTEND_CLIENT_ID}`);
+        setIsConnected(true);
 
-    mqttClient.on("close", () => {
-      console.log("MQTT connection closed");
-      setIsConnected(false);
-    });
+        mqttClientRef.current?.subscribe(
+          [
+            "system/client_count",
+            "system/client/+/info",
+            "system/client/+/disconnect",
+            "quiz/session/start",
+            "quiz/player/+/score",
+            "quiz/answers/distribution",
+          ],
+          (err) => {
+            if (err) {
+              console.error("Subscription error:", err);
+            }
+          }
+        );
+      });
+
+      mqttClientRef.current.on("message", (topic, message) => {
+        try {
+          const messageStr = message.toString();
+
+          // Special handling for answer distribution
+          if (topic === "quiz/answers/distribution") {
+            const distributionObj = JSON.parse(messageStr);
+            setAnswerDistribution(distributionObj);
+            return;
+          }
+
+          // For topics known to send plain text (e.g., quiz/session/start), do not parse
+          if (topic === "quiz/session/start") {
+            console.log(`[QUIZ] New session started: ${messageStr}`);
+            return;
+          }
+
+          // For other topics, only parse if it looks like JSON
+          let payload: any;
+          if (messageStr.trim().startsWith("{")) {
+            payload = JSON.parse(messageStr);
+          } else {
+            payload = messageStr;
+          }
+
+          // Handle sensor data if needed
+          if (topic.startsWith("sensor/") && topic.endsWith("/data")) {
+            const clientId = topic.split("/")[1];
+            setClients((prev) =>
+              prev.map((c) =>
+                c.id === clientId ? { ...c, data: payload } : c
+              )
+            );
+          }
+
+          // Handle client count updates
+          else if (topic === "system/client_count") {
+            setTotalClients(parseInt(messageStr, 10));
+          }
+
+          // Handle client disconnection
+          else if (topic.startsWith("system/client/") && topic.endsWith("/disconnect")) {
+            const clientId = messageStr;
+            setClients((prev) => prev.filter((c) => c.id !== clientId));
+          }
+
+          // Handle client info updates
+          else if (topic.startsWith("system/client/") && topic.endsWith("/info")) {
+            setClients((prev) => {
+              const existing = prev.find((c) => c.id === payload.id);
+              if (existing) {
+                return prev.map((c) =>
+                  c.id === payload.id ? { ...c, ip: payload.ip } : c
+                );
+              }
+              return [...prev, payload];
+            });
+          }
+
+          // Handle player score updates
+          else if (topic.startsWith("quiz/player/") && topic.endsWith("/score")) {
+            setClients((prev) =>
+              prev.map((c) =>
+                c.id === payload.id ? { ...c, score: payload.score } : c
+              )
+            );
+          }
+        } catch (e) {
+          console.error("Failed to parse message:", e);
+        }
+      });
+
+      mqttClientRef.current.on("close", () => {
+        console.warn("MQTT connection closed");
+        setIsConnected(false);
+      });
+
+      mqttClientRef.current.on("error", (error) => {
+        console.error("MQTT Error:", error);
+      });
+    }
 
     return () => {
-      mqttClient.end();
+      console.log("Frontend disconnecting from MQTT...");
+      mqttClientRef.current?.end();
+      mqttClientRef.current = null;
     };
   }, []);
 
-  return { clients, isConnected, totalClients };
+  const publish = (topic: string, message: string) => {
+    if (isConnected) {
+      mqttClientRef.current?.publish(topic, message);
+    } else {
+      console.error("MQTT is not connected. Cannot publish message.");
+    }
+  };
+
+  return {
+    clients: clients.filter((c) => c.id !== FRONTEND_CLIENT_ID),
+    isConnected,
+    totalClients,
+    publish,
+    answerDistribution,
+  };
 }

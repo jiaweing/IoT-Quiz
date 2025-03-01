@@ -1,0 +1,3 @@
+server/drizzle/0000_minor_puma.sql
+server/drizzle/meta/_journal.json
+server/drizzle/meta/0000_snapshot.json
