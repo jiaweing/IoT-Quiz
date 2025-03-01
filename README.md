@@ -185,15 +185,15 @@ erDiagram
 3. **Configure environment variables**
 
    ```bash
-   # Frontend (.env)
-   cp frontend/.env.example frontend/.env
+   # Server (.env)
+   cp server/.env.example server/.env
    # Edit the .env file with your configuration
    ```
 
 4. **Setup database**
 
    ```bash
-   cd frontend
+   cd server
    pnpm db:generate   # Generate migrations
    pnpm db:push      # Push to database
    ```
@@ -209,7 +209,7 @@ erDiagram
 
    ```bash
    cd server
-   pnpm start
+   pnpm dev
    ```
 
 2. **Start the frontend**
