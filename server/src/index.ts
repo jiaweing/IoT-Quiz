@@ -307,6 +307,62 @@ broker.on("publish", (packet: PublishPacket, client: AedesClient | null) => {
         // Award points if the answer is correct.
         const pointsAwarded = isCorrect ? Math.round(questionRecord.points * timeFactor) : 0;
 
+        // Check if a response already exists for this user and question.
+        const existingResponse = await db
+        .select()
+        .from(responses)
+        .where(
+          and(
+            eq(responses.playerId, client.id),
+            eq(responses.questionId, questionId),
+            eq(responses.sessionId, activeSession)
+          )
+        )
+        .limit(1);
+
+        if (existingResponse.length > 0) {
+          // Get previous points awarded for this response.
+          const prevPoints = existingResponse[0].pointsAwarded || 0;
+          // Adjust player's score by subtracting the old points.
+          player.score -= prevPoints;
+
+          const prevOptionId = existingResponse[0].optionId;
+          const prevOptionResult = await db
+          .select()
+          .from(options)
+          .where(eq(options.id, prevOptionId))
+          .limit(1);
+          if (prevOptionResult.length > 0) {
+            const prevOrder = prevOptionResult[0].order;
+            // Decrement the distribution count for the previous option.
+            currentAnswerDistribution[String(prevOrder)] =
+              Math.max(0, (currentAnswerDistribution[String(prevOrder)] || 0) - 1);
+          }
+
+          // Update the existing response record with the latest answer.
+          await db.update(responses)
+            .set({
+              optionId: optionId,
+              responseTime: computedResponseTime,
+              isCorrect: isCorrect,
+              pointsAwarded: pointsAwarded,
+            })
+            .where(eq(responses.id, existingResponse[0].id));
+          console.log(`[QUIZ] Updated response for ${client.id}`);
+        } else {
+          // Insert a new response record.
+          await db.insert(responses).values({
+            id: generateUUID(),
+            sessionId: activeSession,
+            questionId,
+            playerId: client.id,
+            optionId,
+            responseTime: computedResponseTime,
+            isCorrect,
+            pointsAwarded,
+          });
+        }
+
         if (isCorrect) {
           player.score += pointsAwarded;
         }
@@ -320,18 +376,6 @@ broker.on("publish", (packet: PublishPacket, client: AedesClient | null) => {
           topic: `quiz/player/${client.id}/score`,
           payload: Buffer.from(JSON.stringify({ id: client.id, score: player.score })),
           qos: 1,
-        });
-
-        // Insert the response into the DB.
-        await db.insert(responses).values({
-          id: generateUUID(),
-          sessionId: activeSession,
-          questionId,
-          playerId: client.id,
-          optionId,
-          responseTime: computedResponseTime,
-          isCorrect,
-          pointsAwarded,
         });
 
         // Update answer distribution based on the option's order.
