@@ -84,7 +84,6 @@ export default function Home() {
       }
       const data = await response.json();
       console.log("✅ Session started:", data);
-      publish("quiz/session/start", quizDetails.title);
       setStep(Step.QUESTION_PAGE);
     } catch (error) {
       console.error("🚨 Failed to start session:", error);
