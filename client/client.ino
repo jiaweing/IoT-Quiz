@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>  // Recommended for JSON parsing
+#include <time.h>
 
 // WiFi credentials
 const char* ssid = "SINGTEL-xxxx";
@@ -16,7 +17,9 @@ const char* mqtt_client_count_topic = "system/client_count";
 const char* quiz_response_topic = "quiz/response";
 const char* quiz_join_topic = "quiz/session/join";
 const char* quiz_question_topic = "quiz/question";
+const char* quiz_question_closed_topic = "quiz/question/closed";
 const char* quiz_session_start_topic = "quiz/session/start";
+const char* time_sync_topic = "system/time/sync";
 
 // Generate a random client ID
 String getRandomClientId() {
@@ -33,6 +36,11 @@ String currentSessionId = "";
 
 // Global variable to track last broadcast time
 unsigned long lastBroadcastTime = 0;
+
+// Global variable for time sync offset (in milliseconds)
+unsigned long long timeOffset = 0;
+
+bool questionActive = false;  // Track whether a question is open
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -71,6 +79,11 @@ void displaySessionId() {
   M5.Lcd.print(s);
 }
 
+// Returns the current synchronized time in milliseconds (server time equivalent)
+unsigned long long getSynchronizedTime() {
+  return millis() + timeOffset;
+}
+
 void callback(char* topic, byte* payload, unsigned int length) {
   char message[256];  
   length = min(length, (unsigned int)255);
@@ -81,6 +94,21 @@ void callback(char* topic, byte* payload, unsigned int length) {
   Serial.print(topic);
   Serial.print(": ");
   Serial.println(message);
+
+   // Handle time synchronization message
+  if (strcmp(topic, time_sync_topic) == 0) {
+    StaticJsonDocument<200> timeDoc;
+    DeserializationError err = deserializeJson(timeDoc, message);
+    if (!err) {
+      unsigned long long serverTime = timeDoc["serverTime"].as<unsigned long long>();
+      // Compute offset so that: serverTime = millis() + timeOffset
+      timeOffset = serverTime - millis();
+    } else {
+      Serial.print("Time sync error: ");
+      Serial.println(err.f_str());
+    }
+    return;
+  }
 
   if (strcmp(topic, quiz_session_start_topic) == 0) {
     // Assume the payload contains the session id (or name)
@@ -138,6 +166,21 @@ void callback(char* topic, byte* payload, unsigned int length) {
     
     selectedAnswer = 0;
     logMessage(optionTexts[selectedAnswer].c_str(), 6);
+    questionActive = true;
+    return;
+  }
+
+   // Handle question closed
+  if (strcmp(topic, quiz_question_closed_topic) == 0) {
+    Serial.println("Question Closed: " + currentQuestionId);
+    
+    // Mark question as inactive
+    questionActive = false;
+    
+    // Clear the screen and display "Question Ended"
+    clearLine(6);
+    logMessage("Question Ended", 6);
+    
     return;
   }
 
@@ -194,6 +237,8 @@ void reconnect() {
       client.subscribe(scoreTopic.c_str());
       client.subscribe(quiz_session_start_topic);
       client.subscribe(quiz_question_topic);
+      client.subscribe(time_sync_topic);
+      client.subscribe(quiz_question_closed_topic);
     } else {
       char buf[32];
       snprintf(buf, sizeof(buf), "MQTT:%d", client.state());
@@ -231,12 +276,12 @@ void loop() {
   client.loop();
   M5.update();
 
-  // Clear "Answer sent" if no new question broadcast received in 10 seconds.
+  // Clear "Answer sent" if no new question broadcast received in 20 seconds.
   if (millis() - lastBroadcastTime > 20000) {
     clearLine(7);
   }
 
-  if (M5.BtnA.wasPressed() && totalOptions > 0) {
+  if (M5.BtnA.wasPressed() && questionActive && totalOptions > 0) {
     selectedAnswer = (selectedAnswer + 1) % totalOptions;
     logMessage(optionTexts[selectedAnswer].c_str(), 6);
     Serial.print("Selected option index: ");
@@ -246,13 +291,12 @@ void loop() {
     delay(200);
   }
 
-  if (M5.BtnB.wasPressed()) {
+  if (M5.BtnB.wasPressed() && questionActive) {
     if (totalOptions > 0) {
       char payload[256];
-      // Use the broadcast timestamp from the current question.
       snprintf(payload, sizeof(payload),
                "{\"questionId\":\"%s\",\"optionId\":\"%s\",\"timestamp\":%llu}",
-               currentQuestionId.c_str(), optionIds[selectedAnswer].c_str(), currentQuestionTimestamp);
+               currentQuestionId.c_str(), optionIds[selectedAnswer].c_str(), getSynchronizedTime());
       Serial.print("Sending payload: ");
       Serial.println(payload);
       if (client.publish(quiz_response_topic, payload)) {

@@ -56,7 +56,7 @@ const broker = require("aedes")();
 const connectedClients = new Map<string, ClientData>();
 let activeSession: string | null = null; // Active quiz session
 let currentAnswerDistribution: { [key: string]: number } = { "1": 0, "2": 0, "3": 0, "4": 0 };
-
+const questionTimestamps = new Map<string, number>();
 
 // Helper function to broadcast current question details
 async function broadcastCurrentQuestion(sessionId: string, questionIndex: number = 0) {
@@ -98,6 +98,9 @@ async function broadcastCurrentQuestion(sessionId: string, questionIndex: number
   currentAnswerDistribution = { "1": 0, "2": 0, "3": 0, "4": 0 }
 
   const broadcastTimestamp = Date.now();
+  
+  // Record the broadcast timestamp for this question
+  questionTimestamps.set(questionData.id, broadcastTimestamp);
 
   const payload = {
     id: questionData.id,
@@ -112,6 +115,17 @@ async function broadcastCurrentQuestion(sessionId: string, questionIndex: number
     payload: Buffer.from(JSON.stringify(payload)),
     qos: 0,
   });
+
+  // In broadcastCurrentQuestion() after broadcasting the question:
+  setTimeout(() => {
+    const closePayload = { questionId: questionData.id, closedAt: Date.now() };
+    broker.publish({
+      topic: "quiz/question/closed",
+      payload: Buffer.from(JSON.stringify(closePayload)),
+      qos: 0,
+    });
+    console.log(`[QUIZ] Closed question: ${questionData.id}`);
+  }, 30000);
 
   console.log(`[QUIZ] Broadcasted question: ${questionData.id}`);
 }
@@ -129,6 +143,22 @@ function publishClientCount() {
     });
   }, 500);
 }
+
+// Function to publish server time for synchronization
+function publishTimeSync() {
+  setInterval(() => {
+      const serverTime = Date.now(); // Get server time in milliseconds
+      broker.publish({
+          topic: "system/time/sync",
+          payload: Buffer.from(JSON.stringify({ serverTime })),
+          qos: 0,
+      });
+      // console.log(`[SYNC] Server time published: ${serverTime}`);
+  }, 1000); // Broadcast every 5 seconds
+}
+
+publishTimeSync();
+
 
 // MQTT: Track client connections
 broker.on("client", (client: AedesClient) => {
@@ -222,7 +252,7 @@ broker.on("publish", (packet: PublishPacket, client: AedesClient | null) => {
     const { questionId, optionId, timestamp} = answerObj;
     console.log("Received response for question id: ", questionId);
     console.log("Received option id: ", optionId);
-    console.log("Received broadcast timestamp: ", timestamp);
+    console.log("Received client timestamp: ", timestamp);
     (async () => {
       try {
          // Fetch the question record to verify the question exists.
@@ -255,12 +285,28 @@ broker.on("publish", (packet: PublishPacket, client: AedesClient | null) => {
         const optionRecord = optResult[0];
         const isCorrect = optionRecord.isCorrect;
 
-        // Compute response time using the provided broadcast timestamp.
-        const computedResponseTime = Date.now() - Number(timestamp);
+        const maxAllowedTime = 30000; // 30 seconds in ms
+        const questionBroadcastTimestamp = questionTimestamps.get(questionId);
+        let computedResponseTime = 0;
+        if (questionBroadcastTimestamp) {
+          // Calculate reaction time using the client's synchronized response timestamp.
+          computedResponseTime = Number(timestamp) - questionBroadcastTimestamp;
+        } else {
+          console.log("Computed response time: ERROR");
+        }
         console.log("Computed response time: ", computedResponseTime);
 
+        // Ignore responses after 30 seconds
+        if (computedResponseTime > maxAllowedTime) {
+          console.log(`[QUIZ] ${client.id} answered too late (${computedResponseTime} ms). Ignoring response.`);
+          return;
+        }
+
+        // Compute time factor: 0 ms => factor 1, 30000 ms => factor 0.
+        const timeFactor = 1 - (computedResponseTime / maxAllowedTime);
         // Award points if the answer is correct.
-        const pointsAwarded = isCorrect ? questionRecord.points : 0;
+        const pointsAwarded = isCorrect ? Math.round(questionRecord.points * timeFactor) : 0;
+
         if (isCorrect) {
           player.score += pointsAwarded;
         }

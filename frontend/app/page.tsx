@@ -6,6 +6,8 @@ import { useMqtt } from "@/hooks/use-mqtt";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card } from "../components/ui/card";
+import { timeStamp } from "console";
+
 
 // Quiz data
 interface QuizDetails {
@@ -14,6 +16,7 @@ interface QuizDetails {
     questionText: string;
     answers: string[];
     correctAnswerIndex: number;
+    timestamp?: number;
   }[];
 }
 
@@ -27,7 +30,7 @@ enum Step {
 }
 
 export default function Home() {
-  const { clients, isConnected, totalClients, publish, answerDistribution } = useMqtt();
+  const { clients, isConnected, totalClients, publish, answerDistribution, broadcastQuestion } = useMqtt();
 
   const [step, setStep] = useState<Step>(Step.CREATE_QUIZ);
   const [quizDetails, setQuizDetails] = useState<QuizDetails | null>(null);
@@ -152,7 +155,11 @@ export default function Home() {
       )}
       {step === Step.QUESTION_PAGE && quizDetails && (
         <QuestionPage
-          question={quizDetails.questions[currentQuestionIndex]}
+          question={{
+            ...quizDetails.questions[currentQuestionIndex],
+            timestamp:
+              broadcastQuestion?.timestamp
+          }}
           currentIndex={currentQuestionIndex}
           totalQuestions={quizDetails.questions.length}
           onNextQuestion={handleNextQuestion}
@@ -343,18 +350,57 @@ function QuestionPage({
     questionText: string;
     answers: string[];
     correctAnswerIndex: number;
+    timestamp: number;
   };
   currentIndex: number;
   totalQuestions: number;
   onNextQuestion: () => void;
   totalResponses: number;
 }) {
+  const maxTime = 30000; // 30 seconds in ms
+  const [currentTime, setCurrentTime] = useState(Date.now());
+  const [expired, setExpired] = useState(false);
+
+  // Update current time every 100ms.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 100);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Compute elapsed time since the broadcast timestamp.
+  const elapsed = currentTime - question.timestamp;
+  const timeLeftMs = Math.max(0, maxTime - elapsed);
+  const timeLeftSec = (timeLeftMs / 1000).toFixed(1);
+  const progressWidth = `${(timeLeftMs / maxTime) * 100}%`;
+
+  // When time expires, trigger ..
+  useEffect(() => {
+    if (timeLeftMs <= 0 && !expired) {
+      setExpired(true);
+      onNextQuestion();
+    }
+  }, [timeLeftMs, expired, onNextQuestion]);
+
   return (
     <>
       <h2 className="text-xl font-bold mb-2">
         Question {currentIndex + 1} of {totalQuestions} ({totalResponses} responses)
       </h2>
       <p className="mb-4">{question.questionText}</p>
+      {/* Synchronized Progress Bar */}
+      <div style={{ border: "1px solid #ccc", height: "20px", marginBottom: "10px" }}>
+        <div
+          style={{
+            height: "100%",
+            width: progressWidth,
+            backgroundColor: "green",
+            transition: "width 0.1s linear",
+          }}
+        ></div>
+      </div>
+      <p className="mb-4">Time left: {timeLeftSec} seconds</p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {question.answers.map((ans, i) => (
           <Card key={i} className="p-4">
@@ -363,11 +409,14 @@ function QuestionPage({
         ))}
       </div>
       <div className="mt-4">
-        <Button onClick={onNextQuestion}>Show Correct Answer</Button>
+        <Button onClick={onNextQuestion}>
+          Show Correct Answer
+        </Button>
       </div>
     </>
   );
 }
+
 
 function AnswerRevealPage({ question, distribution, totalClients, onRevealNext, }: { 
   question: { questionText: string; answers: string[]; correctAnswerIndex: number; }; 

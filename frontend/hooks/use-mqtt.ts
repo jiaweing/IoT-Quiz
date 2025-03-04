@@ -17,12 +17,13 @@ export function useMqtt() {
   const [totalClients, setTotalClients] = useState(0);
   // New state for answer distribution (for 4 answers)
   const [answerDistribution, setAnswerDistribution] = useState<{ [key: string]: number }>({
-  "1": 0,
-  "2": 0,
-  "3": 0,
-  "4": 0,
-});
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+  });
 
+  const [broadcastQuestion, setBroadcastQuestion] = useState<any>(null);
   // Persist MQTT connection across renders
   const mqttClientRef = useRef<mqtt.MqttClient | null>(null);
 
@@ -47,6 +48,7 @@ export function useMqtt() {
             "quiz/session/start",
             "quiz/player/+/score",
             "quiz/answers/distribution",
+            "quiz/question",
           ],
           (err) => {
             if (err) {
@@ -70,6 +72,14 @@ export function useMqtt() {
           // For topics known to send plain text (e.g., quiz/session/start), do not parse
           if (topic === "quiz/session/start") {
             console.log(`[QUIZ] New session started: ${messageStr}`);
+            return;
+          }
+
+          // Handle broadcast question messages.
+          if (topic === "quiz/question") {
+            // Expect the payload to include a 'timestamp' along with other question details.
+            const payload = JSON.parse(messageStr);
+            setBroadcastQuestion(payload);
             return;
           }
 
@@ -159,5 +169,6 @@ export function useMqtt() {
     totalClients,
     publish,
     answerDistribution,
+    broadcastQuestion
   };
 }
