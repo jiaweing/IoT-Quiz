@@ -113,7 +113,7 @@ async function broadcastCurrentQuestion(sessionId: string, questionIndex: number
   broker.publish({
     topic: "quiz/question",
     payload: Buffer.from(JSON.stringify(payload)),
-    qos: 0,
+    qos: 1,
   });
 
   // In broadcastCurrentQuestion() after broadcasting the question:
@@ -122,7 +122,7 @@ async function broadcastCurrentQuestion(sessionId: string, questionIndex: number
     broker.publish({
       topic: "quiz/question/closed",
       payload: Buffer.from(JSON.stringify(closePayload)),
-      qos: 0,
+      qos: 1,
     });
     console.log(`[QUIZ] Closed question: ${questionData.id}`);
   }, 30000);
@@ -139,7 +139,7 @@ function publishClientCount() {
     broker.publish({
       topic: "system/client_count",
       payload: Buffer.from(count.toString()),
-      qos: 0,
+      qos: 1,
     });
   }, 500);
 }
@@ -151,7 +151,7 @@ function publishTimeSync() {
       broker.publish({
           topic: "system/time/sync",
           payload: Buffer.from(JSON.stringify({ serverTime })),
-          qos: 0,
+          qos: 1,
       });
       // console.log(`[SYNC] Server time published: ${serverTime}`);
   }, 1000); // Broadcast every 5 seconds
@@ -174,7 +174,7 @@ broker.on("client", (client: AedesClient) => {
   broker.publish({
     topic: `system/client/${client.id}/info`,
     payload: Buffer.from(JSON.stringify({ id: client.id, ip: clientIp })),
-    qos: 0,
+    qos: 1,
   });
   console.log(`[WS] Client connected: ${client.id} from ${clientIp}`);
 });
@@ -185,7 +185,7 @@ broker.on("clientDisconnect", (client: AedesClient) => {
   broker.publish({
     topic: `system/client/${client.id}/disconnect`,
     payload: Buffer.from(client.id),
-    qos: 0,
+    qos: 1,
   });
   if (client.id !== "frontend_dashboard") {
     console.log(`[WS] Client disconnected: ${client.id}`);
@@ -319,7 +319,7 @@ broker.on("publish", (packet: PublishPacket, client: AedesClient | null) => {
         broker.publish({
           topic: `quiz/player/${client.id}/score`,
           payload: Buffer.from(JSON.stringify({ id: client.id, score: player.score })),
-          qos: 0,
+          qos: 1,
         });
 
         // Insert the response into the DB.
@@ -341,7 +341,7 @@ broker.on("publish", (packet: PublishPacket, client: AedesClient | null) => {
         broker.publish({
           topic: "quiz/answers/distribution",
           payload: Buffer.from(JSON.stringify(currentAnswerDistribution)),
-          qos: 0,
+          qos: 1,
         });
 
         console.log(`[QUIZ] ${client.id} answered ${isCorrect ? "correctly" : "incorrectly"}. New score: ${player.score}`);
@@ -410,7 +410,7 @@ app.post("/api/quiz/start", async (c) => {
   broker.publish({
     topic: "quiz/session/start",
     payload: Buffer.from(sessionName),
-    qos: 0,
+    qos: 1,
   });
   console.log(`[QUIZ] Session started: ${sessionName}`);
   

@@ -50,6 +50,7 @@ export function useMqtt() {
             "quiz/answers/distribution",
             "quiz/question",
           ],
+          {qos: 1},
           (err) => {
             if (err) {
               console.error("Subscription error:", err);

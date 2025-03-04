@@ -232,13 +232,13 @@ void reconnect() {
     logMessage("MQTT connecting...", 2);
     if (client.connect(mqtt_client_id.c_str())) {
       logMessage("MQTT OK!", 2);
-      client.subscribe(mqtt_client_count_topic);
+      client.subscribe(mqtt_client_count_topic, 1);
       String scoreTopic = String("quiz/player/") + mqtt_client_id + "/score";
-      client.subscribe(scoreTopic.c_str());
-      client.subscribe(quiz_session_start_topic);
-      client.subscribe(quiz_question_topic);
-      client.subscribe(time_sync_topic);
-      client.subscribe(quiz_question_closed_topic);
+      client.subscribe(scoreTopic.c_str(), 1);
+      client.subscribe(quiz_session_start_topic, 1);
+      client.subscribe(quiz_question_topic, 1);
+      client.subscribe(time_sync_topic, 1);
+      client.subscribe(quiz_question_closed_topic, 1);
     } else {
       char buf[32];
       snprintf(buf, sizeof(buf), "MQTT:%d", client.state());
