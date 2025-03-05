@@ -6,7 +6,6 @@ import type { Client as AedesClient } from "aedes";
 import { createServer } from "aedes-server-factory";
 import net from "net";
 import os from "os";
-import { cpus } from "os";
 import { require } from "./cjs-loader.js";
 import { eq, and, sql, desc } from "drizzle-orm";
 import { db } from "@/db/db.js"; // Adjust the path as needed
@@ -34,22 +33,20 @@ interface ClientData {
   authenticated: boolean;
 }
 
-const MONGO_URL = process.env.MONGO_URL;
-
 const mq = process.env.MQ === "redis"
   ? require("mqemitter-redis")({
-      port: process.env.REDIS_PORT || 6379,
+      port: process.env.REDIS_PORT,
     })
   : require("mqemitter-mongodb")({
-      url: MONGO_URL,
+      url: process.env.MONGO_URL,
     });
 
 const persistence = process.env.PERSISTENCE === "redis"
   ? require("aedes-persistence-redis")({
-      port: process.env.REDIS_PORT || 6379,
+      port: process.env.REDIS_PORT,
     })
   : require("aedes-persistence-mongodb")({
-      url: MONGO_URL,
+      url: process.env.MONGO_URL,
     });
 
 // ----- CLUSTERING SETUP -----
