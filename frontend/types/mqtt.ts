@@ -1,7 +1,9 @@
 export interface ClientInfo {
   id: string;
   ip: string;
+  session?: string;
   score?: number;
+  authenticated: boolean;
 }
 
 export interface BroadcastQuestion {

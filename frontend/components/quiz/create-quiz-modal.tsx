@@ -20,6 +20,7 @@ interface CreateQuizModalProps {
 
 export function CreateQuizModal({ onClose, onCreate }: CreateQuizModalProps) {
   const [title, setTitle] = useState("");
+  const [tapSequence, setTapSequence] = useState("");
   const [questions, setQuestions] = useState([
     {
       questionText: "",
@@ -36,7 +37,7 @@ export function CreateQuizModal({ onClose, onCreate }: CreateQuizModalProps) {
   };
 
   const handleCreate = () => {
-    onCreate({ title, questions });
+    onCreate({ title, questions, tapSequence });
   };
 
   return (
@@ -51,6 +52,14 @@ export function CreateQuizModal({ onClose, onCreate }: CreateQuizModalProps) {
                 placeholder="Enter quiz title"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Auth Sequence</Label>
+              <Input
+                placeholder="Enter Auth Sequence (E.g. ABA)"
+                value={tapSequence}
+                onChange={(e) => setTapSequence(e.target.value)}
               />
             </div>
 

@@ -45,7 +45,7 @@ export default function QuizHost() {
   // Handle quiz creation
   const handleCreateQuiz = async (details: QuizDetails) => {
     try {
-      const data = await actions.createQuiz(details.title, details.questions);
+      const data = await actions.createQuiz(details.title, details.questions, details.tapSequence);
       setQuizDetails(details);
       setSessionId(data.sessionId);
       setShowCreateModal(false);
@@ -65,6 +65,16 @@ export default function QuizHost() {
       console.error("Failed to start session:", error);
     }
   };
+
+  const handleAllowJoining = async () => {
+    if (!sessionId || !quizDetails) return;
+    try {
+      await actions.allowJoining(sessionId);
+    } catch (error) {
+      console.error("Failed to broadcast auth code:", error);
+    }
+  };
+
 
   // Handle showing answer
   const handleNextQuestion = () => {
@@ -93,6 +103,12 @@ export default function QuizHost() {
       } catch (error) {
         console.error("Failed to fetch leaderboard:", error);
       }
+
+      try {
+        await actions.endQuizSession(sessionId);
+      } catch (error) {
+        console.error("Failed to broadcast session end:", error);
+      }
     }
   };
 
@@ -104,7 +120,8 @@ export default function QuizHost() {
     try {
       const data = await actions.createQuiz(
         quizDetails.title,
-        quizDetails.questions
+        quizDetails.questions,
+        quizDetails.tapSequence
       );
       setSessionId(data.sessionId);
       setStep(Step.CONNECTED_PLAYERS);
@@ -127,8 +144,11 @@ export default function QuizHost() {
   const connectedClients = clients.map((client: ClientInfo) => ({
     ...client,
     score: client.score || 0,
+    authenticated: client.authenticated ?? false, // default value if missing
   }));
 
+  const authenticatedClients = connectedClients.filter(client => client.authenticated);
+  const authenticatedClientsCount = connectedClients.filter(client => client.authenticated).length;
   return (
     <div className="min-h-screen w-full flex items-center justify-center bg-background">
       <main className="container max-w-4xl mx-auto p-6">
@@ -142,11 +162,13 @@ export default function QuizHost() {
 
           {step === Step.CONNECTED_PLAYERS && quizDetails && (
             <ConnectedPlayers
-              clients={connectedClients}
+              expectedTapSequence={quizDetails?.tapSequence || ""}
+              clients={authenticatedClients}
               isConnected={isConnected}
-              totalClients={totalClients}
+              totalClients={authenticatedClientsCount}
               quizTitle={quizDetails.title}
               startSession={startSession}
+              allowJoining={handleAllowJoining}
             />
           )}
 
@@ -154,7 +176,7 @@ export default function QuizHost() {
             <QuestionPage
               question={{
                 ...quizDetails.questions[currentQuestionIndex],
-                timestamp: broadcastQuestion?.timestamp ?? Date.now(),
+                timestamp: broadcastQuestion?.timestamp,
               }}
               currentIndex={currentQuestionIndex}
               totalQuestions={quizDetails.questions.length}

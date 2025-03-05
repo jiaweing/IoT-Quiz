@@ -1,12 +1,6 @@
 import mqtt from "mqtt";
 import { useEffect, useRef, useState } from "react";
-
-export interface ClientInfo {
-  id: string;
-  ip: string;
-  session?: string;
-  score?: number;
-}
+import { ClientInfo } from "@/types/mqtt";
 
 // Give the frontend a unique identifier
 const FRONTEND_CLIENT_ID = "frontend_dashboard";
@@ -115,11 +109,12 @@ export function useMqtt() {
 
           // Handle client info updates
           else if (topic.startsWith("system/client/") && topic.endsWith("/info")) {
+            console.log(payload)
             setClients((prev) => {
               const existing = prev.find((c) => c.id === payload.id);
               if (existing) {
                 return prev.map((c) =>
-                  c.id === payload.id ? { ...c, ip: payload.ip } : c
+                  c.id === payload.id ? { ...c, ip: payload.ip, authenticated: payload.authenticated } : c
                 );
               }
               return [...prev, payload];

@@ -6,12 +6,14 @@ export interface QuizDetails {
     correctAnswerIndex: number;
     timestamp?: number;
   }[];
+  tapSequence: string;
 }
 
 export interface Client {
   id: string;
   ip: string;
   score: number;
+  authenticated: boolean;
 }
 
 export interface LeaderboardEntry {

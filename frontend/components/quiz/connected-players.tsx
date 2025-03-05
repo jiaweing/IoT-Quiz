@@ -4,30 +4,40 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Client } from "@/types/quiz";
 
 interface ConnectedPlayersProps {
+  expectedTapSequence: string;
   clients: Client[];
   isConnected: boolean;
   totalClients: number;
   quizTitle: string;
   startSession: () => void;
+  allowJoining:() => void;
 }
 
 export function ConnectedPlayers({
+  expectedTapSequence,
   clients,
   isConnected,
   totalClients,
   quizTitle,
   startSession,
+  allowJoining,
 }: ConnectedPlayersProps) {
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="space-y-2">
           <h1 className="text-3xl font-bold tracking-tight">Waiting Room</h1>
-          <p className="text-lg text-muted-foreground">Quiz: {quizTitle}</p>
+          <p className="text-lg text-muted-foreground">Quiz: {quizTitle} </p>
+          <p className="text-lg text-muted-foreground">Authorization Sequence: <span className="text-red-500">{expectedTapSequence}</span></p>
         </div>
-        <Button size="lg" onClick={startSession}>
-          Start Quiz
-        </Button>
+        <div className="flex gap-2">
+          <Button size="lg" onClick={startSession}>
+            Start Quiz
+          </Button>
+          <Button size="lg"  onClick={allowJoining} variant="outline">
+            Allow Joining
+          </Button>
+        </div>   
       </div>
 
       <Card>

@@ -6,7 +6,7 @@ import { createServer } from "aedes-server-factory";
 import net from "net";
 import os from "os";
 import { require } from "./cjs-loader.js";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, desc } from "drizzle-orm";
 import { db } from "@/db/db.js"; // Adjust the path as needed
 import { sessions, questions, options, players, responses } from "@/db/schema.js";
 
@@ -29,6 +29,7 @@ interface ClientData {
   deviceId: string;
   name: string;
   score: number;
+  authenticated: boolean;
 }
 
 const app = new Hono();
@@ -53,6 +54,23 @@ app.options("*", (c) => {
 
 // MQTT Broker & In-Memory Tracking
 const broker = require("aedes")();
+
+interface ExtendedAedesClient extends AedesClient {
+  authenticated?: boolean;
+}
+
+// Authorize publish on "quiz/response" only for authenticated clients.
+broker.authorizePublish = (
+  client: ExtendedAedesClient,
+  packet: PublishPacket,
+  callback: (error: Error | null) => void
+): void => {
+  const topic = packet.topic;
+  if (topic.startsWith("quiz/response") && !client.authenticated) {
+    return callback(new Error("Not authorized"));
+  }
+  callback(null);
+};
 const connectedClients = new Map<string, ClientData>();
 let activeSession: string | null = null; // Active quiz session
 let currentAnswerDistribution: { [key: string]: number } = { "1": 0, "2": 0, "3": 0, "4": 0 };
@@ -161,7 +179,7 @@ publishTimeSync();
 
 
 // MQTT: Track client connections
-broker.on("client", (client: AedesClient) => {
+broker.on("client", (client: ExtendedAedesClient) => {
   if (client.id === "frontend_dashboard") return;
   let clientIp = "unknown";
   if (client.conn) {
@@ -169,14 +187,14 @@ broker.on("client", (client: AedesClient) => {
     clientIp = socket.remoteAddress || "unknown";
   }
   // For simplicity, we use client.id as both deviceId and name.
-  connectedClients.set(client.id, { id: client.id, ip: clientIp, deviceId: client.id, name: client.id, score: 0 });
+  connectedClients.set(client.id, { id: client.id, ip: clientIp, deviceId: client.id, name: client.id, score: 0, authenticated:false });
   publishClientCount();
   broker.publish({
     topic: `system/client/${client.id}/info`,
-    payload: Buffer.from(JSON.stringify({ id: client.id, ip: clientIp })),
+    payload: Buffer.from(JSON.stringify({ id: client.id, ip: clientIp, authenticated: false })),
     qos: 1,
   });
-  console.log(`[WS] Client connected: ${client.id} from ${clientIp}`);
+  console.log(`[WS] Client connected: ${client.id} from ${clientIp} with authentication status: False`);
 });
 
 broker.on("clientDisconnect", (client: AedesClient) => {
@@ -193,48 +211,82 @@ broker.on("clientDisconnect", (client: AedesClient) => {
 });
 
 // MQTT: Handle incoming messages
-broker.on("publish", (packet: PublishPacket, client: AedesClient | null) => {
+broker.on("publish", async (packet: PublishPacket, client: ExtendedAedesClient | null) => {
   if (!client) return;
   const topic = packet.topic;
   const payloadStr = packet.payload.toString();
-
   // Handle quiz session join
   if (topic === "quiz/session/join") {
-    if (!activeSession) return;
+    if (activeSession == "active") {
+      console.log(`[SECURITY] Reject join from ${client.id} – quiz already started.`);
+      return;
+    }
+    let joinData;
+    try {
+      joinData = JSON.parse(payloadStr);
+    } catch (e) {
+      console.error("Failed to parse join payload:", e);
+      return;
+    }
+    // Expect joinData to include sessionId and auth (the tap sequence)
+    const sessionIdFromPayload: string = joinData.sessionId;
+    const submittedSequence: string = joinData.auth;
+    // Look up session in DB to get stored tapSequence
+    const sessionInfo = await db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, sessionIdFromPayload))
+      .limit(1);
+    if (sessionInfo.length === 0) {
+      console.error("Session not found.");
+      return;
+    }
+    const sessionRecord = sessionInfo[0];
+    // Check that the submitted tap sequence matches the stored one
+    if (submittedSequence !== sessionRecord.tapSequence) {
+      console.error(`[SECURITY] Invalid tap sequence from ${client.id}.`);
+      return;
+    }
+    // Register the client as a player
     const clientInfo = connectedClients.get(client.id);
     if (clientInfo) {
-      clientInfo.session = activeSession;
-      console.log(`[QUIZ] ${client.id} joined session: ${activeSession}`);
-
-      // Insert a new player record into the DB using the players table.
-      (async () => {
-        try {
-          // Check if player already exists for this session.
-          const existing = await db
-            .select()
-            .from(players)
-            .where(
-              and(
-                eq(players.deviceId, client.id),
-                eq(players.sessionId, activeSession)
-              )
+      clientInfo.session = sessionIdFromPayload;
+      console.log(`[QUIZ] ${client.id} joined session: ${sessionIdFromPayload}`);
+      try {
+        const existing = await db
+          .select()
+          .from(players)
+          .where(
+            and(
+              eq(players.deviceId, client.id),
+              eq(players.sessionId, sessionIdFromPayload)
             )
-            .limit(1);
-          if (existing.length === 0) {
-            await db.insert(players).values({
-              id: generateUUID(),
-              sessionId: activeSession,
-              deviceId: client.id,
-              name: client.id, // For demo, using client.id
-              score: 0,
-            });
-          }
-        } catch (error) {
-          console.error("Failed to insert player into DB:", error);
+          )
+          .limit(1);
+        if (existing.length === 0) {
+          await db.insert(players).values({
+            id: generateUUID(),
+            sessionId: sessionIdFromPayload,
+            deviceId: client.id,
+            name: client.id,
+            score: 0,
+          });
         }
-      })();
+        clientInfo.authenticated = true
+        // Mark client as authenticated for publishing responses.
+        client.authenticated = true;
+        broker.publish({
+          topic: `system/client/${client.id}/info`,
+          payload: Buffer.from(JSON.stringify({ id: client.id, ip: clientInfo.ip, authenticated: clientInfo.authenticated })),
+          qos: 1,
+        });
+      } catch (error) {
+        console.error("Failed to insert player into DB:", error);
+      }
     }
+    return;
   }
+
 
   // Handle quiz responses
   if (topic === "quiz/response") {
@@ -398,8 +450,8 @@ broker.on("publish", (packet: PublishPacket, client: AedesClient | null) => {
 
 // API Endpoint: Create Quiz – creates a session, questions, and options
 app.post("/api/quiz/create", async (c) => {
-  const { sessionName, quizQuestions } = await c.req.json();
-  if (!sessionName || !quizQuestions) return c.text("Invalid payload", 400);
+  const { sessionName, quizQuestions, tapSequence } = await c.req.json();
+  if (!sessionName || !quizQuestions || !tapSequence) return c.text("Invalid payload", 400);
 
   const sessionId = generateUUID();
   // Insert a new session with default config
@@ -407,6 +459,7 @@ app.post("/api/quiz/create", async (c) => {
     id: sessionId,
     name: sessionName,
     status: "pending",
+    tapSequence,
   });
 
   // Insert questions and their options
@@ -433,6 +486,38 @@ app.post("/api/quiz/create", async (c) => {
   }
   console.log(`[QUIZ] Quiz created: ${sessionName} with sessionId: ${sessionId}`);
   return c.json({ message: "Quiz created", sessionId });
+});
+
+
+// API Endpoint: Broadcast Auth Code – publishes the session's tap sequence to M5Stick devices.
+app.post("/api/quiz/auth", async (c) => {
+  const { sessionId } = await c.req.json();
+  if (!sessionId) return c.text("Session ID required", 400);
+
+  // Retrieve the session record to get the tap sequence and session name.
+  const sessionResult = await db
+    .select()
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  if (sessionResult.length === 0) {
+    return c.text("Session not found", 404);
+  }
+  const sessionRecord = sessionResult[0];
+  const sessionName = sessionRecord.name;
+  const tapSequence = sessionRecord.tapSequence;
+
+  // Create payload with session details.
+  const payload = JSON.stringify({ sessionId, sessionName, tapSequence });
+
+  // Publish the auth payload to topic "quiz/auth"
+  broker.publish({
+    topic: "quiz/auth",
+    payload: Buffer.from(payload),
+    qos: 1,
+  });
+  console.log(`[QUIZ] Broadcasted auth code: ${payload}`);
+  return c.json({ message: "Auth code broadcasted", sessionId });
 });
 
 // API Endpoint: Start Quiz Session – activates the session and resets answer distribution
@@ -479,8 +564,28 @@ app.post("/api/quiz/broadcast", async (c) => {
 app.get("/api/quiz/leaderboard", async (c) => {
   const sessionId = c.req.query("sessionId");
   if (!sessionId) return c.text("Session ID required", 400);
-  const leaderboard = await db.select().from(players).where(eq(players.sessionId, sessionId));
+  const leaderboard = await db
+    .select()
+    .from(players)
+    .where(eq(players.sessionId, sessionId))
+    .orderBy(desc(players.score)); // Sort by score in descending order
   return c.json(leaderboard);
+});
+
+// API Endpoint: End Quiz – broadcasts an end-of-quiz message.
+app.post("/api/quiz/end", async (c) => {
+  const { sessionId } = await c.req.json();
+  if (!sessionId) return c.text("Session ID required", 400);
+
+  // Publish end-of-quiz payload on topic "quiz/end"
+  const payload = JSON.stringify({ sessionId, message: "Quiz Ended" });
+  broker.publish({
+    topic: "quiz/end",
+    payload: Buffer.from(payload),
+    qos: 1,
+  });
+  console.log(`[QUIZ] End of quiz broadcast for session: ${sessionId}`);
+  return c.json({ message: "Quiz ended", sessionId });
 });
 
 // Networking Configuration

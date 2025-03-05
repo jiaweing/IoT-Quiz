@@ -6,12 +6,13 @@ const API_BASE = "http://localhost:3001/api/quiz";
 
 export async function createQuiz(
   sessionName: string,
-  quizQuestions: QuizDetails["questions"]
+  quizQuestions: QuizDetails["questions"],
+  tapSequence: QuizDetails["tapSequence"]
 ) {
   const response = await fetch(`${API_BASE}/create`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sessionName, quizQuestions }),
+    body: JSON.stringify({ sessionName, quizQuestions, tapSequence }),
   });
 
   if (!response.ok) {
@@ -34,6 +35,22 @@ export async function startQuizSession(sessionId: string) {
 
   return response.json();
 }
+
+export async function allowJoining(sessionId: string) {
+  const response = await fetch(`${API_BASE}/auth`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to broadcast authorization sequence: ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+
 
 export async function broadcastQuestion(
   sessionId: string,
@@ -59,6 +76,20 @@ export async function getLeaderboard(sessionId: string) {
 
   if (!response.ok) {
     throw new Error(`Failed to fetch leaderboard: ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+export async function endQuizSession(sessionId: string) {
+  const response = await fetch(`${API_BASE}/end`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId }),
+    });
+
+  if (!response.ok) {
+    throw new Error(`Failed to broadcast session end: ${response.statusText}`);
   }
 
   return response.json();

@@ -15,6 +15,7 @@ export const sessions = mysqlTable("sessions", {
   id: varchar("id", { length: 36 }).primaryKey(), // UUID
   name: varchar("name", { length: 255 }).notNull(),
   status: varchar("status", { length: 20 }).notNull().default("pending"), // pending, active, completed
+  tapSequence: varchar("tap_sequence", {length: 10}).notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow().onUpdateNow(),
   config: json("config")
