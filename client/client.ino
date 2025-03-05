@@ -3,14 +3,8 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>  // Recommended for JSON parsing
 #include <time.h>
+#include "config.h"
 
-// WiFi credentials
-const char* ssid = "SINGTEL-xxxx";
-const char* password = "xxxxxx";
-
-// MQTT Broker settings
-const char* mqtt_server = "192.168.x.xx"; // Replace with your server IP
-const int mqtt_port = 1883;  // Standard MQTT port
 const char* mqtt_client_count_topic = "system/client_count";
 
 // MQTT topics
@@ -208,7 +202,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
 void setup_wifi() {
   M5.Lcd.fillRect(120, 0, 15, 15, BLACK);
-  WiFi.begin(ssid, password);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   
   int dots = 0;
   while (WiFi.status() != WL_CONNECTED) {
@@ -255,6 +249,7 @@ void setup() {
   M5.Lcd.fillScreen(BLACK);
   M5.Lcd.setTextSize(1);
   
+  loadConfig();
   randomSeed(analogRead(0));
   
   char idBuf[32];
@@ -263,7 +258,7 @@ void setup() {
   logMessage("Clients: 0", 5);
   
   setup_wifi();
-  client.setServer(mqtt_server, mqtt_port);
+  client.setServer(MQTT_SERVER, MQTT_PORT);
   client.setCallback(callback);
   client.setBufferSize(2048);
   client.setKeepAlive(60);
