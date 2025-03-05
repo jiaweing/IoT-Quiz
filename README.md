@@ -142,6 +142,7 @@ erDiagram
 - Processes responses
 - Calculates scores
 - Ensures low-latency operation
+- Maintains performance under high connection volumes.
 
 ### 3. Edge Device (M5StickC Plus)
 
@@ -158,6 +159,8 @@ erDiagram
 - Node.js 18+
 - pnpm
 - MySQL 8.0+
+- MongoDB
+- Redis
 - M5StickC Plus device(s)
 - Arduino IDE with M5StickC Plus support
 
@@ -180,6 +183,35 @@ erDiagram
    # Server
    cd ../server
    pnpm install
+
+   # --- MongoDB Installation ---
+   # Choose the instructions for your platform:
+
+   # For macOS (using Homebrew):
+   brew tap mongodb/brew
+   brew install mongodb-community@4.4
+   brew services start mongodb-community@4.4
+
+   # For Windows:
+   # Download the MongoDB Community Server installer from:
+   # https://www.mongodb.com/try/download/community
+   # Follow the installation instructions, and optionally install MongoDB as a Windows service.
+
+   # --- Redis Installation ---
+   # Choose the instructions for your platform:
+   # For macOS (using Homebrew):
+   brew install redis
+   brew services start redis
+
+   # For Windows:
+   wsl --install
+   sudo apt-get install lsb-release curl gpg
+   curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
+   sudo chmod 644 /usr/share/keyrings/redis-archive-keyring.gpg
+   echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list
+   sudo apt-get update
+   sudo apt-get install redis
+   sudo service redis-server start
    ```
 
 3. **Configure environment variables**
