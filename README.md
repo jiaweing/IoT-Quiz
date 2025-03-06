@@ -234,14 +234,20 @@ erDiagram
 5. **Configure TLS**
 
    ```bash
+   # Install on Windows
    choco install mkcert
 
+   # Install on macOS
+   brew install mkcert
+
+   mkcert -install
+
    cd server/certificates
-   # Edit the cert.cnf file with your server IP address
+   # Edit the cert.cnf file and replace CN and IP.1 with your server IP address
    
    mkcert -CAROOT
    # Go to the path returned and copy "rootCA.pem" and "rootCA-key.pem" into server/certificates
-   
+
    openssl genrsa -out server.key 2048
    openssl req -new -key server.key -out server.csr -config cert.cnf -reqexts req_ext
    openssl x509 -req -in server.csr -CA rootca.pem -CAkey rootca-key.pem -CAcreateserial -out server.crt -days 365 -sha256 -extensions req_ext
