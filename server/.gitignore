@@ -26,3 +26,12 @@ lerna-debug.log*
 
 # misc
 .DS_Store
+
+certificates/https-key.pem
+certificates/https.pem
+certificates/rootCA-key.pem
+certificates/rootCA.pem
+certificates/rootca.srl
+certificates/server.crt
+certificates/server.key
+certificates/server.csr

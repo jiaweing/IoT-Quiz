@@ -161,6 +161,7 @@ erDiagram
 - MySQL 8.0+
 - MongoDB
 - Redis
+- Openssl
 - M5StickC Plus device(s)
 - Arduino IDE with M5StickC Plus support
 
@@ -230,7 +231,26 @@ erDiagram
    pnpm db:push      # Push to database
    ```
 
-5. **Flash M5StickC Plus**
+5. **Configure TLS**
+
+   ```bash
+   choco install mkcert
+
+   cd server/certificates
+   # Edit the cert.cnf file with your server IP address
+   
+   mkcert -CAROOT
+   # Go to the path returned and copy "rootCA.pem" and "rootCA-key.pem" into server/certificates
+   
+   openssl genrsa -out server.key 2048
+   openssl req -new -key server.key -out server.csr -config cert.cnf -reqexts req_ext
+   openssl x509 -req -in server.csr -CA rootca.pem -CAkey rootca-key.pem -CAcreateserial -out server.crt -days 365 -sha256 -extensions req_ext
+
+   mkcert <SERVER_IP> localhost 127.0.0.1 ::1 # Replace <SERVER_IP> with your own server ip
+   # Rename generated files: "xx.pem" and "xx-key.pem" to "https.pem" and "http-key.pem"
+   ```
+
+6. **Flash M5StickC Plus**
    - Open `client/client.ino` in Arduino IDE
    - Configure WiFi credentials
    - Upload to device
@@ -253,7 +273,7 @@ erDiagram
 
 3. **Access the application**
 
-   - Open `http://localhost:3000` in your browser
+   - Open `https://localhost:3000` in your browser
    - Create a new quiz session
    - Share the session code with participants
 

@@ -2,7 +2,7 @@
 
 import { QuizDetails } from "@/types/quiz";
 
-const API_BASE = "http://localhost:3001/api/quiz";
+const API_BASE = "https://localhost:3001/api/quiz";
 
 export async function createQuiz(
   sessionName: string,

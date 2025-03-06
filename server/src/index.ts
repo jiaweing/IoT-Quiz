@@ -1,6 +1,9 @@
 // server.ts
 import cluster from "cluster";
+import tls from "tls";
+import fs from "fs";
 import { serve } from "@hono/node-server";
+import { createServer as createHttpsServer } from 'node:https'
 import { Hono } from "hono";
 import type { Client as AedesClient } from "aedes";
 import { createServer } from "aedes-server-factory";
@@ -648,50 +651,70 @@ if (cluster.isPrimary) {
     return c.json({ message: "Quiz ended", sessionId });
   });
 
-  // Networking Configuration
-  const mqttPort = 8888;
-  const mqttTcpPort = 1883;
+  
+  const mqttPort = 8443; // Standard secure Websocket port
   const webserverPort = 3001;
+  const tlsPort = 8883; // Standard secure MQTT port
+
+  const tlsOptions = {
+    key: fs.readFileSync("./certificates/server.key"),
+    cert: fs.readFileSync("./certificates/server.crt"),
+    ca: fs.readFileSync("./certificates/rootCA.pem"),
+  };
+
+  const httpsOptions = {
+    key: fs.readFileSync("./certificates/https-key.pem"),
+    cert: fs.readFileSync("./certificates/https.pem"),
+    ca: fs.readFileSync("./certificates/rootCA.pem"),
+  } 
 
   function getLocalIpAddress() {
     const interfaces = os.networkInterfaces();
     for (const name in interfaces) {
-      for (const iface of interfaces[name]!) {
-        if (iface.family === "IPv4" && !iface.internal) {
-          return iface.address;
+      // Check if the interface name indicates it's a wireless interface
+      if (name.toLowerCase().includes("wlan") || name.toLowerCase().includes("wi-fi")) {
+        for (const iface of interfaces[name]!) {
+          if (iface.family === "IPv4" && !iface.internal) {
+            return iface.address;
+          }
         }
       }
     }
+    // If no wireless interface found, default to localhost
     return "127.0.0.1";
   }
 
-  // Start MQTT WebSocket server
-  const httpServer = createServer(broker, { ws: true });
-  httpServer.listen(mqttPort, () => {
+  // Start secure MQTT WebSocket server
+  const httpsServer = createServer(broker, { ws: true, https: httpsOptions });
+  httpsServer.listen(mqttPort, () => {
     console.log("WebSocket MQTT server running on port:", mqttPort);
   });
 
-  // Start MQTT TCP server
-  const tcpServer = net.createServer(broker.handle);
-  tcpServer.listen(mqttTcpPort, () => {
-    console.log("[TCP] MQTT server listening on", getLocalIpAddress() + ":" + mqttTcpPort);
+
+  // Start secure MQTT TCP server using TLS
+  const tlsServer = tls.createServer(tlsOptions, broker.handle);
+  tlsServer.listen(tlsPort,() => {
+    console.log("[TLS] Secure MQTT server listening on", getLocalIpAddress() + ":" + tlsPort);
   });
-  tcpServer.on("connection", (socket) => {
-    console.log("[TCP] New client connection from:", socket.remoteAddress);
+  tlsServer.on("connection", (socket) => {
+    console.log("[TLS] New secure client connection from:", socket.remoteAddress);
   });
-  tcpServer.on("close", () => {
+  tlsServer.on("close", () => {
     console.log("[TCP] Server closed");
   });
-  tcpServer.on("error", (err) => {
-    console.error("[TCP] Error:", err);
+  tlsServer.on("error", (err) => {
+    console.error("[TLS] Error:", err);
   });
+ 
 
   // HTTP Routes
   app.get("/", (c) => {
     return c.text("Webserver & MQTT Server are running");
   });
 
-  serve({ fetch: app.fetch, port: webserverPort });
+  // Start secure web server for API Calls
+  serve({ fetch: app.fetch, createServer: createHttpsServer, 
+    serverOptions: httpsOptions, port: webserverPort });
 
   console.log(`Worker ${process.pid} started and is handling MQTT and HTTP traffic.`);
 }

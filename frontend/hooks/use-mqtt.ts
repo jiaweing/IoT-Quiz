@@ -23,7 +23,7 @@ export function useMqtt() {
 
   useEffect(() => {
     if (!mqttClientRef.current) {
-      mqttClientRef.current = mqtt.connect("ws://localhost:8888", {
+      mqttClientRef.current = mqtt.connect("wss://localhost:8443", {
         clientId: FRONTEND_CLIENT_ID,
         clean: false,
         reconnectPeriod: 5000,
@@ -51,6 +51,7 @@ export function useMqtt() {
             }
           }
         );
+        console.log("Sucess");
       });
 
       mqttClientRef.current.on("message", (topic, message) => {
