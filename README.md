@@ -93,6 +93,7 @@ erDiagram
         uuid id
         string name
         string status
+        string tapSequence
         json config
     }
 
