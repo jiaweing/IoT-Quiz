@@ -31,52 +31,79 @@ A real-time interactive quiz system powered by M5StickC Plus devices with MQTT a
 
 ```mermaid
 graph TD
-    M[M5StickC Plus] <-->|MQTT| S[Server]
-    S <-->|MQTT| F[Frontend]
-    F <-->|SQL| D[(MySQL Database)]
+    F["Teacher Dashboard (Next.js)"]
+    S["Server Cluster (API & MQTT Broker)"]
+    D["MySQL Database (Quiz Details)"]
+    R[(Redis Message Emitter)]
+    MDB["MongoDB Persistence (MQTT State)"]
+    M["M5StickC Plus (Edge Device)"]
+    NTP["NTP Server (pool.ntp.org, time.nist.gov)"]
 
-    subgraph Edge Device
-        M
-    end
-
-    subgraph Backend
-        S -->|Process Answers| S
-        S -->|Update Scores| S
-    end
-
-    subgraph Web Application
-        F -->|Display Questions| F
-        F -->|Show Leaderboard| F
-    end
+    F <-- "HTTPS API (TLS/SSL)" --> S
+    S -- "MQTT over WSS (TLS)" --> F
+    S <-- "MQTT (TLS)" --> M
+    S -- "SQL Queries via ORM" --> D
+    S -- "Event Propagation (Pub/Sub)" --> R
+    S -- "Persist MQTT State" --> MDB
+    M -- "NTP Sync" --> NTP
 ```
 
 ### Quiz Session Flow
 
 ```mermaid
 sequenceDiagram
-    participant H as Host/Teacher
-    participant F as Frontend
-    participant S as Server
+    participant T as Teacher Dashboard
+    participant S as Server (API & MQTT Broker)
+    participant D as MySQL Database
     participant M as M5StickC Plus
-    participant D as Database
 
-    H->>F: Create Quiz Session
-    F->>D: Store Session
-    F->>S: Start Session
-    S->>M: Broadcast Session Code
+    %% Quiz Creation and Authorization Broadcast
+    T->>S: POST /api/quiz/create<br/>(sessionName, quizQuestions, tapSequence)
+    S->>D: Store session, questions, options
+    S-->>T: Return sessionId
 
-    loop For Each Question
-        H->>F: Show Question
-        F->>S: Broadcast Question
-        S->>M: Display Question
-        M->>S: Send Answer
-        S->>F: Update Results
-        F->>D: Store Response
+    T->>S: POST /api/quiz/auth<br/>(sessionId)
+    S->>D: Retrieve session details (including tap sequence)
+    S->>M: Publish "quiz/auth"<br/>(sessionName, tapSequence)
+    S-->>T: Auth code broadcasted
+
+    %% M5Stick joins session by sending tap sequence
+    M->>S: Publish "quiz/session/join"<br/>(sessionId, tapSequenceInput)
+    S->>D: Lookup session tap sequence
+    alt Tap sequence matches
+        S->>M: Accept join (mark as authenticated)
+        S->>S: Update in-memory client record
+        S->>M: Publish updated "system/client/<id>/info"<br/>(authenticated: true)
+        S-->>T: (Updated client info available)
+    else Tap sequence does not match
+        S->>M: Reject join (invalid tap sequence)
     end
 
-    H->>F: End Session
-    F->>D: Save Final Scores
-    S->>M: Session Complete
+    %% Starting the Quiz Session
+    T->>S: POST /api/quiz/start<br/>(sessionId)
+    S->>D: Update session status to active
+    S->>M: Publish "quiz/session/start"<br/>(sessionName)
+    S-->>T: Session started
+
+    %% For Each Question
+    loop For Each Question
+        T->>S: POST /api/quiz/broadcast<br/>(sessionId, questionIndex)
+        S->>M: Publish "quiz/question"<br/>(question, options, timestamp)
+        M->>S: Publish "quiz/response"<br/>(answer, timestamp)
+        S->>D: Update/Insert response, compute score
+        S->>T: Publish "quiz/answers/distribution" <br/> (answerDistribution)
+    end
+
+    %% End Quiz Session
+   
+    par
+      T->>S: POST /api/quiz/end<br/>(sessionId)
+      S->>D: Update session status
+      S->>M: Publish "quiz/end"<br/>(Quiz Ended)
+    and
+      T->>S: GET /api/quiz/leaderboard<br/>(sessionId)
+      S-->>T: Return leaderboard
+    end
 ```
 
 ### Database Schema Relationships
@@ -299,11 +326,11 @@ IoT/
 ├── frontend/           # Next.js frontend application
 │   ├── app/           # Pages and routing
 │   ├── components/    # React components
-│   ├── db/           # Database schema and migrations
 │   ├── hooks/        # Custom React hooks
 │   └── public/       # Static assets
 ├── server/           # MQTT broker and quiz logic
-│   └── src/         # Server source code
+│   |── src/         # Server source code
+│   |── db/           # Database schema and migrations
 └── client/            # M5StickC Plus code
     └── client.ino     # Arduino sketch
 ```
