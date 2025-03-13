@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Checkbox } from "@/components/ui/checkbox";
+import { GradientBackground } from "@/components/ui/gradient-background";
 import {
   Select,
   SelectContent,
@@ -85,27 +86,35 @@ const toggleAnswerCorrect = (qIndex: number, ansIndex: number) => {
   };
 
   return (
-    <div className="fixed inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4">
-      <Card className="w-full max-w-2xl">
-        <CardContent className="p-6">
-          <h2 className="text-2xl font-bold mb-6">Create Quiz</h2>
-          <div className="space-y-6">
-            <div className="space-y-2">
-              <Label>Quiz Title</Label>
-              <Input
-                placeholder="Enter quiz title"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Auth Sequence</Label>
-              <Input
-                placeholder="Enter Auth Sequence (E.g. ABA)"
-                value={tapSequence}
-                onChange={(e) => setTapSequence(e.target.value)}
-              />
-            </div>
+    <GradientBackground className="h-screen w-screen absolute">
+      <div className="fixed inset-0 flex flex-col items-center justify-center p-4">
+        <h1 className="text-4xl font-bold mb-6 flex items-center text-white">
+          Hello! 
+          <span role="img" aria-label="wave">
+            👋
+          </span>
+          Welcome to  <span className="text-yellow-300 p-3 underline underline-offset-4">Quizzle</span>
+        </h1>
+        <Card className="w-full max-w-2xl">
+          <CardContent className="p-6">
+            <h2 className="text-2xl font-bold mb-6">Create Quiz</h2>
+            <div className="space-y-6">
+              <div className="space-y-2">
+                <Label>Quiz Title</Label>
+                <Input
+                  placeholder="Enter quiz title"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Auth Sequence</Label>
+                <Input
+                  placeholder="Enter Auth Sequence (E.g. ABA)"
+                  value={tapSequence}
+                  onChange={(e) => setTapSequence(e.target.value)}
+                />
+              </div>
 
             <ScrollArea className="h-[400px] pr-4">
               <div className="space-y-4">
@@ -174,20 +183,21 @@ const toggleAnswerCorrect = (qIndex: number, ansIndex: number) => {
               </div>
             </ScrollArea>
 
-            <div className="flex flex-col sm:flex-row gap-2 justify-between">
-              <Button onClick={handleAddQuestion} variant="secondary">
-                Add Question
-              </Button>
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={onClose}>
-                  Cancel
+              <div className="flex flex-col sm:flex-row gap-2 justify-between">
+                <Button onClick={handleAddQuestion} variant="secondary">
+                  Add Question
                 </Button>
-                <Button onClick={handleCreate}>Create Quiz</Button>
+                <div className="flex gap-2">
+                  <Button variant="outline" onClick={onClose}>
+                    Cancel
+                  </Button>
+                  <Button onClick={handleCreate}>Create Quiz</Button>
+                </div>
               </div>
             </div>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
+          </CardContent>
+        </Card>
+      </div>
+    </GradientBackground>
   );
 }

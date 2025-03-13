@@ -164,8 +164,8 @@ export default function QuizHost() {
   const authenticatedClients = connectedClients.filter(client => client.authenticated);
   const authenticatedClientsCount = connectedClients.filter(client => client.authenticated).length;
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-background">
-      <main className="container max-w-4xl mx-auto p-6">
+    <div className="min-h-screen w-full flex">
+      <main className="container">
         <div className="w-full">
           {showCreateModal && step === Step.CREATE_QUIZ && (
             <CreateQuizModal
