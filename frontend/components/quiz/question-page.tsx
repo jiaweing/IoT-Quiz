@@ -8,7 +8,9 @@ interface QuestionPageProps {
   question: {
     questionText: string;
     answers: string[];
-    correctAnswerIndex: number;
+    // correctAnswerIndex: number;
+    correctAnswerIndex: number | number[]; 
+    type?: "single_select" | "multi_select";
     timestamp: number;
   };
   currentIndex: number;
@@ -62,6 +64,11 @@ export function QuestionPage({
           </Badge>
         </div>
         <p className="text-lg">{question.questionText}</p>
+        {question.type === "multi_select" && (
+          <Badge variant="outline" className="self-start">
+            Select multiple answers
+          </Badge>
+        )}
       </div>
 
       <div className="space-y-2">

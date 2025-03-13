@@ -36,7 +36,7 @@ export const questions = mysqlTable(
     id: varchar("id", { length: 36 }).primaryKey(), // UUID
     sessionId: varchar("session_id", { length: 36 }).notNull(),
     text: text("text").notNull(),
-    type: varchar("type", { length: 20 }).notNull().default("multiple_choice"), // multiple_choice, true_false
+    type: varchar("type", { length: 20 }).notNull().default("single_select"), // multiple_choice, true_false
     points: int("points").notNull().default(1000),
     timeLimit: int("time_limit").notNull().default(30), // seconds
     order: int("order").notNull(),

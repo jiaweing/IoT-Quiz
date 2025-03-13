@@ -45,7 +45,20 @@ export default function QuizHost() {
   // Handle quiz creation
   const handleCreateQuiz = async (details: QuizDetails) => {
     try {
+      // Transform the questions to include the required fields
+      const formattedQuestions = details.questions.map(q => ({
+        ...q,
+        // Add default values for the new required fields if they don't exist
+        correctAnswers: q.correctAnswers ||
+          q.answers.map((_, i) => i === q.correctAnswerIndex),
+        type: q.type || "single_select"
+      }));
       const data = await actions.createQuiz(details.title, details.questions, details.tapSequence);
+      setQuizDetails({
+        ...details,
+        questions: formattedQuestions
+      });
+      
       setQuizDetails(details);
       setSessionId(data.sessionId);
       setShowCreateModal(false);
@@ -54,6 +67,7 @@ export default function QuizHost() {
       console.error("Failed to create quiz:", error);
     }
   };
+
 
   // Start quiz session
   const startSession = async () => {

@@ -8,11 +8,14 @@ interface AnswerRevealProps {
     questionText: string;
     answers: string[];
     correctAnswerIndex: number;
+    correctAnswers?: boolean[];
+    type?: "single_select" | "multi_select";
   };
   distribution: { [key: string]: number };
   totalClients: number;
   onRevealNext: () => void;
 }
+
 
 export function AnswerReveal({
   question,
@@ -26,6 +29,17 @@ export function AnswerReveal({
   );
   const totalResponses = distArray.reduce((sum, count) => sum + count, 0);
   const notAnswered = totalClients - totalResponses;
+  // Add a function to determine if an answer is correct
+  const isCorrectAnswer = (index: number) => {
+    if (question.correctAnswers) {
+      // Use the correctAnswers array if available
+      return question.correctAnswers[index] === true;
+    } else if (question.correctAnswerIndex !== undefined) {
+      // Fall back to correctAnswerIndex for backward compatibility
+      return index === question.correctAnswerIndex;
+    }
+    return false;
+  };
 
   return (
     <div className="space-y-6">
@@ -44,16 +58,15 @@ export function AnswerReveal({
       </div>
 
       <div className="grid gap-4">
-        {question.answers.map((answer, index) => {
-          const count = distArray[index] || 0;
-          const percentage =
-            totalResponses > 0 ? (count / totalResponses) * 100 : 0;
-
+      {question.answers.map((answer, index) => {
+        const count = distArray[index] || 0;
+        const percentage = totalResponses > 0 ? (count / totalResponses) * 100 : 0;
+        const isCorrect = isCorrectAnswer(index);
           return (
             <Card
               key={index}
               className={`${
-                index === question.correctAnswerIndex
+                isCorrect
                   ? "border-green-500 bg-green-50/50 dark:bg-green-950/50"
                   : ""
               }`}
@@ -94,6 +107,11 @@ export function AnswerReveal({
             </Card>
           );
         })}
+        {question.type === "multi_select" && (
+          <Badge variant="secondary" className="text-sm">
+            Multiple correct answers
+          </Badge>
+        )}
       </div>
 
       <div className="flex justify-end">
@@ -104,3 +122,4 @@ export function AnswerReveal({
     </div>
   );
 }
+

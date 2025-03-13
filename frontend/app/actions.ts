@@ -9,10 +9,16 @@ export async function createQuiz(
   quizQuestions: QuizDetails["questions"],
   tapSequence: QuizDetails["tapSequence"]
 ) {
+  // Transform questions to ensure they have all required fields
+  const formattedQuestions = quizQuestions.map(q => ({
+    ...q,
+    correctAnswers: q.correctAnswers || q.answers.map((_, i) => i === q.correctAnswerIndex),
+    type: q.type || "single_select"
+  }));
   const response = await fetch(`${API_BASE}/create`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sessionName, quizQuestions, tapSequence }),
+    body: JSON.stringify({ sessionName, quizQuestions: formattedQuestions, tapSequence }),
   });
 
   if (!response.ok) {

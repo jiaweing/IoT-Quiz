@@ -38,13 +38,19 @@ unsigned long long timeOffset = 0;
 bool questionActive = false;      // Indicates if a question is open.
 bool joinedSession = false;       // Indicates if this device has joined.
 
+
 // For questions/answers
 String optionIds[4];
 String optionTexts[4];
 int totalOptions = 0;
 int selectedAnswer = 0;
 String currentQuestionId = "";
+bool selectedOptions[4] = {false, false, false, false}; 
+bool isMultiSelect = false; 
 unsigned long long currentQuestionTimestamp = 0;
+int currentPage = 0; 
+int cursorPosition = 0; 
+const int maxOptionsPerPage = 7; 
 
 // WiFiClient espClient;
 WiFiClientSecure espClient;
@@ -56,12 +62,129 @@ void clearLine(int line) {
   M5.Lcd.setCursor(0, yPos);
 }
 
+void displayQuizPage() {
+  
+    M5.Lcd.fillScreen(BLACK);
+    
+    // Display session ID at top
+    M5.Lcd.setCursor(0, 0);
+    M5.Lcd.print("Session: " + currentSessionId);
+    int optionsHeaderY = 12;
+    M5.Lcd.setCursor(0, optionsHeaderY);
+    M5.Lcd.print("Options:");
+    
+    // Calculate which options to display based on cursor position
+    int displayableItems = maxOptionsPerPage;
+    int totalItems = totalOptions + 1; // Add 1 for Submit option
+    int startOption = (cursorPosition / displayableItems) * displayableItems;
+    int endOption = min(startOption + displayableItems, totalItems);
+    
+    // Display options with cursor and selection status
+    // Start options below the header
+    const int optionsStartY = optionsHeaderY + 12;
+    
+    for (int i = startOption; i < endOption; i++) {
+        M5.Lcd.setCursor(0, optionsStartY + (i - startOption) * 12);
+        
+        // Display cursor for current selection
+        if (i == cursorPosition) {
+            M5.Lcd.print("> ");
+        } else {
+            M5.Lcd.print("  ");
+        }
+        
+        // Check if this is the submit option
+        if (i == totalOptions) {
+            M5.Lcd.print("SUBMIT");
+        } else {
+            // Display checkbox status
+            if (isMultiSelect) {
+                M5.Lcd.print(selectedOptions[i] ? "[X] " : "[ ] ");
+            } else {
+                M5.Lcd.print((selectedAnswer == i) ? "[X] " : "[ ] ");
+            }
+            
+            // Display option text (truncate if too long)
+            String displayText = optionTexts[i];
+            if (displayText.length() > 15) { // Adjust based on screen width
+                displayText = displayText.substring(0, 12) + "...";
+            }
+            M5.Lcd.print(displayText);
+        }
+    }
+    
+    // Show page indicator if there are multiple pages
+    if (totalItems > maxOptionsPerPage) {
+        int currentPageNum = cursorPosition / maxOptionsPerPage + 1;
+        int totalPages = (totalItems + maxOptionsPerPage - 1) / maxOptionsPerPage;
+        M5.Lcd.setCursor(0, M5.Lcd.height() - 12);
+        M5.Lcd.printf("Page %d/%d", currentPageNum, totalPages);
+    }
+}
+
 void logMessage(const char* msg, int line) {
   clearLine(line);
   M5.Lcd.setCursor(0, line * 12);
   M5.Lcd.print(msg);
 }
+// Add functions to send answers
+void sendSingleSelectAnswer() {
+  char payload[256];
+  snprintf(payload, sizeof(payload),
+           "{\"questionId\":\"%s\",\"optionId\":\"%s\",\"timestamp\":%llu}",
+           currentQuestionId.c_str(), optionIds[selectedAnswer].c_str(), getSynchronizedTime());
+  Serial.print("Sending payload: ");
+  Serial.println(payload);
+  if (client.publish(quiz_response_topic, payload)) {
+    logMessage("Answer sent", 7);
+    M5.Lcd.fillRect(120, 0, 15, 15, GREEN);
+  } else {
+    logMessage("Pub failed", 7);
+    M5.Lcd.fillRect(120, 0, 15, 15, RED);
+  }
+}
 
+void sendMultiSelectAnswers() {
+  // Count selected options
+  int selectedCount = 0;
+  for (int i = 0; i < totalOptions; i++) {
+    if (selectedOptions[i]) {
+      selectedCount++;
+    }
+  }
+  
+  // Only send if at least one option is selected
+  if (selectedCount == 0) {
+    logMessage("Select at least 1", 7);
+    return;
+  }
+  
+  // Create JSON array of selected option IDs
+  StaticJsonDocument<512> doc;
+  doc["questionId"] = currentQuestionId;
+  doc["timestamp"] = getSynchronizedTime();
+  
+  JsonArray optionIdsArray = doc.createNestedArray("optionIds");
+  for (int i = 0; i < totalOptions; i++) {
+    if (selectedOptions[i]) {
+      optionIdsArray.add(optionIds[i]);
+    }
+  }
+  
+  char payload[512];
+  serializeJson(doc, payload, sizeof(payload));
+  
+  Serial.print("Sending multi-select payload: ");
+  Serial.println(payload);
+  
+  if (client.publish(quiz_response_topic, payload)) {
+    logMessage("Answers sent", 7);
+    M5.Lcd.fillRect(120, 0, 15, 15, GREEN);
+  } else {
+    logMessage("Pub failed", 7);
+    M5.Lcd.fillRect(120, 0, 15, 15, RED);
+  }
+}
 void displaySessionInfo() {
   clearLine(2);
   String s = "Session: " + currentSessionId;
@@ -96,6 +219,20 @@ void syncTime() {
 // Returns the synchronized time (server time equivalent)
 unsigned long long getSynchronizedTime() {
   return millis() + timeOffset;
+}
+
+void displayCurrentOption() {
+  clearLine(6);
+  String displayText;
+  
+  if (isMultiSelect) {
+    displayText = selectedOptions[selectedAnswer] ? "[X] " : "[ ] ";
+    displayText += optionTexts[selectedAnswer];
+  } else {
+    displayText = optionTexts[selectedAnswer];
+  }
+  
+  logMessage(displayText.c_str(), 6);
 }
 
 void callback(char* topic, byte* payload, unsigned int length) {
@@ -180,10 +317,28 @@ void callback(char* topic, byte* payload, unsigned int length) {
     currentQuestionId = doc["id"].as<String>();
     uint64_t ts = doc["timestamp"].as<uint64_t>();
     currentQuestionTimestamp = ts;
+
+    // Log the type field
+    String questionType = doc["type"].as<String>();
+    Serial.print("Received question type: ");
+    Serial.println(questionType);
+
+    // Set the isMultiSelect flag
+    isMultiSelect = (questionType == "multi_select");
+    Serial.print("isMultiSelect: ");
+    Serial.println(isMultiSelect);
+
+    // isMultiSelect = doc["type"].as<String>() == "multi_select";
+
     Serial.print("Received question ID: ");
     Serial.println(currentQuestionId);
     Serial.print("Received question timestamp: ");
     Serial.println(currentQuestionTimestamp);
+
+    for (int i = 0; i < 4; i++) {
+      selectedOptions[i] = false;
+    }
+
     
     totalOptions = 0;
     for (JsonObject option : doc["options"].as<JsonArray>()) {
@@ -196,6 +351,12 @@ void callback(char* topic, byte* payload, unsigned int length) {
     selectedAnswer = 0;
     logMessage(optionTexts[selectedAnswer].c_str(), 6);
     questionActive = true;
+
+    currentPage = 1;
+    cursorPosition = 0;
+    displayQuizPage();
+    questionActive = true;
+  
     return;
   }
 
@@ -203,6 +364,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
   if (strcmp(topic, quiz_question_closed_topic) == 0) {
     Serial.println("Question Closed: " + currentQuestionId);
     questionActive = false;
+    currentPage = 0; 
     clearLine(6);
     logMessage("Question Ended", 6);
     return;
@@ -343,83 +505,139 @@ void loop() {
   if (millis() - lastBroadcastTime > 20000) {
     clearLine(7);
   }
-
-  // If not yet joined, allow the student to input tap sequence using buttons.
-  if (!joinedSession) {
-    // Use BtnA for "A", BtnB for "B".
-    if (M5.BtnA.wasPressed()) {
-      joinSequenceInput += "A";
-      Serial.print("Tap input: ");
-      Serial.println(joinSequenceInput);
-      clearLine(4);
-      M5.Lcd.setCursor(0, 4 * 12);
-      M5.Lcd.print("YourSeq: " + joinSequenceInput);
-      delay(200);
-    }
-    if (M5.BtnB.wasPressed()) {
-      joinSequenceInput += "B";
-      Serial.print("Tap input: ");
-      Serial.println(joinSequenceInput);
-      clearLine(4);
-      M5.Lcd.setCursor(0, 4 * 12);
-      M5.Lcd.print("YourSeq: " + joinSequenceInput);
-      delay(200);
-    }
-    // If input length equals expected tap sequence length, check if it matches.
-    if (expectedTapSequence.length() > 0 &&
-        joinSequenceInput.length() >= expectedTapSequence.length()) {
+  if (currentPage == 0) {
+    // Main page logic (existing code for joining session)
+    if (!joinedSession) {
+      // Use BtnA for "A", BtnB for "B".
+      if (M5.BtnA.wasPressed()) {
+        joinSequenceInput += "A";
         Serial.print("Tap input: ");
-        Serial.println(expectedTapSequence);  
-      if (joinSequenceInput == expectedTapSequence) {
-        // Publish join payload.
-        String joinPayload = String("{\"sessionId\":\"") + currentSessionId + "\",\"auth\":\"" + joinSequenceInput + "\"}";
-        Serial.print("Publishing join payload: ");
-        Serial.println(joinPayload);
-        if (client.publish(quiz_join_topic, joinPayload.c_str())) {
-          Serial.println("Joined session successfully");
-          joinedSession = true;
-          clearLine(5);
-          logMessage("Joined Session", 5);
-        } else {
-          Serial.println("Failed to send join message");
-        }
-      } else {
-        Serial.println("Incorrect tap sequence. Resetting input.");
-        joinSequenceInput = "";
+        Serial.println(joinSequenceInput);
         clearLine(4);
         M5.Lcd.setCursor(0, 4 * 12);
-        M5.Lcd.print("YourSeq: ");
-      }
-    }
-  }
-  else {
-    // If joined and a question is active, allow answer selection.
-    if (questionActive && totalOptions > 0) {
-      if (M5.BtnA.wasPressed()) {
-        selectedAnswer = (selectedAnswer + 1) % totalOptions;
-        logMessage(optionTexts[selectedAnswer].c_str(), 6);
-        Serial.print("Selected option index: ");
-        Serial.println(selectedAnswer);
-        Serial.print("Option UUID: ");
-        Serial.println(optionIds[selectedAnswer]);
+        M5.Lcd.print("YourSeq: " + joinSequenceInput);
         delay(200);
       }
       if (M5.BtnB.wasPressed()) {
-        char payload[256];
-        snprintf(payload, sizeof(payload),
-                 "{\"questionId\":\"%s\",\"optionId\":\"%s\",\"timestamp\":%llu}",
-                 currentQuestionId.c_str(), optionIds[selectedAnswer].c_str(), getSynchronizedTime());
-        Serial.print("Sending payload: ");
-        Serial.println(payload);
-        if (client.publish(quiz_response_topic, payload)) {
-          logMessage("Answer sent", 7);
-          M5.Lcd.fillRect(120, 0, 15, 15, GREEN);
-        } else {
-          logMessage("Pub failed", 7);
-          M5.Lcd.fillRect(120, 0, 15, 15, RED);
-        }
+        joinSequenceInput += "B";
+        Serial.print("Tap input: ");
+        Serial.println(joinSequenceInput);
+        clearLine(4);
+        M5.Lcd.setCursor(0, 4 * 12);
+        M5.Lcd.print("YourSeq: " + joinSequenceInput);
         delay(200);
       }
+      // If input length equals expected tap sequence length, check if it matches.
+      if (expectedTapSequence.length() > 0 &&
+          joinSequenceInput.length() >= expectedTapSequence.length()) {
+          Serial.print("Tap input: ");
+          Serial.println(expectedTapSequence);  
+        if (joinSequenceInput == expectedTapSequence) {
+          // Publish join payload.
+          String joinPayload = String("{\"sessionId\":\"") + currentSessionId + "\",\"auth\":\"" + joinSequenceInput + "\"}";
+          Serial.print("Publishing join payload: ");
+          Serial.println(joinPayload);
+          if (client.publish(quiz_join_topic, joinPayload.c_str())) {
+            Serial.println("Joined session successfully");
+            joinedSession = true;
+            clearLine(5);
+            logMessage("Joined Session", 5);
+          } else {
+            Serial.println("Failed to send join message");
+          }
+        } else {
+          Serial.println("Incorrect tap sequence. Resetting input.");
+          joinSequenceInput = "";
+          clearLine(4);
+          M5.Lcd.setCursor(0, 4 * 12);
+          M5.Lcd.print("YourSeq: ");
+        }
+      }
+      else {
+        // If joined and a question is active, allow answer selection.
+        if (questionActive && totalOptions > 0) {
+          if (M5.BtnA.wasPressed()) {
+            // Navigate through options
+            selectedAnswer = (selectedAnswer + 1) % totalOptions;
+            displayCurrentOption();
+            Serial.print("Selected option index: ");
+            Serial.println(selectedAnswer);
+            delay(200);
+          }
+          if (M5.BtnB.wasPressed()) {
+            if (isMultiSelect) {
+              // Toggle selection for current option
+              selectedOptions[selectedAnswer] = !selectedOptions[selectedAnswer];
+              displayCurrentOption();
+              Serial.print("Toggled option ");
+              Serial.print(selectedAnswer);
+              Serial.print(" to ");
+              Serial.println(selectedOptions[selectedAnswer] ? "selected" : "unselected");
+              delay(200);
+            } else {
+              // For single select, submit immediately
+              sendSingleSelectAnswer();
+              delay(200);
+            }
+          }
+          // Long press button B to submit multi-select answers
+          if (isMultiSelect && M5.BtnB.pressedFor(1000)) {
+            sendMultiSelectAnswers();
+            delay(200);
+          }
+        }
+
+      }
     }
+    
+  } else if (currentPage == 1) {
+    // Quiz page logic
+      if (questionActive && totalOptions > 0) {
+        if (M5.BtnA.wasPressed()) {
+          // Move cursor down, wrap around if needed
+          cursorPosition = (cursorPosition + 1) % (totalOptions + 1); // +1 for Submit option
+          displayQuizPage();
+          delay(200);
+        }
+        
+        if (M5.BtnB.wasPressed()) {
+          // Check if Submit option is selected
+          if (cursorPosition == totalOptions) {
+            // Submit answers
+            if (isMultiSelect) {
+              sendMultiSelectAnswers();
+            } else {
+              // For single select, check if an option is selected
+              bool hasSelection = false;
+              for (int i = 0; i < totalOptions; i++) {
+                if (selectedAnswer == i) {
+                  hasSelection = true;
+                  break;
+                }
+              }
+              
+              if (hasSelection) {
+                sendSingleSelectAnswer();
+              } else {
+                // Display a message if no option is selected
+                M5.Lcd.setCursor(0, M5.Lcd.height() - 36);
+                M5.Lcd.print("Select an option first!");
+                delay(1000);
+                displayQuizPage(); // Redraw the page
+              }
+            }
+          } else {
+            // Toggle selection for current option
+            if (isMultiSelect) {
+              selectedOptions[cursorPosition] = !selectedOptions[cursorPosition];
+            } else {
+              // For single select, just update the selection
+              selectedAnswer = cursorPosition;
+            }
+            displayQuizPage();
+          }
+          delay(200);
+        }
+      }
   }
 }

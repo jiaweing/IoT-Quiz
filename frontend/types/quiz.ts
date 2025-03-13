@@ -4,6 +4,8 @@ export interface QuizDetails {
     questionText: string;
     answers: string[];
     correctAnswerIndex: number;
+    correctAnswers?: boolean[]; 
+    type?: "single_select" | "multi_select";
     timestamp?: number;
   }[];
   tapSequence: string;

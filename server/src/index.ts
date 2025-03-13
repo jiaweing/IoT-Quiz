@@ -139,19 +139,19 @@ if (cluster.isPrimary) {
   let currentAnswerDistribution: { [key: string]: number } = { "1": 0, "2": 0, "3": 0, "4": 0 };
   const questionTimestamps = new Map<string, number>();
 
-  // Helper function to broadcast current question details
-  async function broadcastCurrentQuestion(sessionId: string, questionIndex: number = 0) {
-    // Get total number of questions for the session.
-    const totalQuestionsResult = await db
-    .select({ count: sql`count(*)` })
-    .from(questions)
-    .where(eq(questions.sessionId, sessionId));
-  const totalQuestions = Number(totalQuestionsResult[0].count);
 
-  if (questionIndex >= totalQuestions) {
-    console.error("No question found for the current index; quiz is finished.");
-    return;
-  }
+  async function broadcastCurrentQuestion(sessionId: string, questionIndex: number = 0) {
+     // Get total number of questions for the session.
+     const totalQuestionsResult = await db
+     .select({ count: sql`count(*)` })
+     .from(questions)
+     .where(eq(questions.sessionId, sessionId));
+   const totalQuestions = Number(totalQuestionsResult[0].count);
+ 
+   if (questionIndex >= totalQuestions) {
+     console.error("No question found for the current index; quiz is finished.");
+     return;
+   }
     
     // Retrieve the question for the session, ordered by "order"
     const questionResult = await db
@@ -161,43 +161,47 @@ if (cluster.isPrimary) {
       .orderBy(questions.order)
       .limit(1)
       .offset(questionIndex);
-    
+  
     if (questionResult.length === 0) {
       console.error("No question found for the current index");
       return;
     }
+  
     const questionData = questionResult[0];
-
+  
     // Fetch options for the question ordered by "order"
     const optionsResult = await db
       .select()
       .from(options)
       .where(eq(options.questionId, questionData.id))
       .orderBy(options.order);
-
+  
     // Reset answer distribution for new question (keys "1" to "4")
-    currentAnswerDistribution = { "1": 0, "2": 0, "3": 0, "4": 0 }
-
+    currentAnswerDistribution = { "1": 0, "2": 0, "3": 0, "4": 0 };
+  
     const broadcastTimestamp = Date.now();
-    
+  
     // Record the broadcast timestamp for this question
     questionTimestamps.set(questionData.id, broadcastTimestamp);
-
+  
     const payload = {
       id: questionData.id,
       text: questionData.text,
+      type: questionData.type, // Include the question type (e.g., "multi_select" or "single_select")
       options: optionsResult.map(opt => ({ id: opt.id, text: opt.text })),
-      timestamp: broadcastTimestamp
+      timestamp: broadcastTimestamp,
     };
 
+    console.log("Broadcasting question payload:", payload);
+  
     // Publish the question details to topic "quiz/question"
     broker.publish({
       topic: "quiz/question",
       payload: Buffer.from(JSON.stringify(payload)),
       qos: 1,
     });
-
-    // In broadcastCurrentQuestion() after broadcasting the question:
+  
+    // Close the question after 30 seconds
     setTimeout(() => {
       const closePayload = { questionId: questionData.id, closedAt: Date.now() };
       broker.publish({
@@ -207,10 +211,10 @@ if (cluster.isPrimary) {
       });
       console.log(`[QUIZ] Closed question: ${questionData.id}`);
     }, 30000);
-
+  
     console.log(`[QUIZ] Broadcasted question: ${questionData.id}`);
   }
-
+  
   // Publish the connected clients count to topic "system/client_count"
   function publishClientCount() {
     setTimeout(() => {
@@ -511,31 +515,50 @@ if (cluster.isPrimary) {
     }
   });
 
-  // API Endpoint: Create Quiz – creates a session, questions, and options
-  app.post("/api/quiz/create", async (c) => {
-    const { sessionName, quizQuestions, tapSequence } = await c.req.json();
-    if (!sessionName || !quizQuestions || !tapSequence) return c.text("Invalid payload", 400);
 
-    const sessionId = generateUUID();
-    // Insert a new session with default config
-    await db.insert(sessions).values({
-      id: sessionId,
-      name: sessionName,
-      status: "pending",
-      tapSequence,
+  // API Endpoint: Create Quiz – creates a session, questions, and options
+app.post("/api/quiz/create", async (c) => {
+  const { sessionName, quizQuestions, tapSequence } = await c.req.json();
+  if (!sessionName || !quizQuestions || !tapSequence) return c.text("Invalid payload", 400);
+  
+  
+
+  const sessionId = generateUUID();
+  // Insert a new session with default config
+  await db.insert(sessions).values({
+    id: sessionId,
+    name: sessionName,
+    status: "pending",
+    tapSequence,
+  });
+
+  // Insert questions and their options
+  for (let i = 0; i < quizQuestions.length; i++) {
+    const q = quizQuestions[i];
+    const questionId = generateUUID();
+    await db.insert(questions).values({
+      id: questionId,
+      sessionId,
+      text: q.questionText,
+      type: q.type, 
+      order: i + 1,
     });
 
-    // Insert questions and their options
-    for (let i = 0; i < quizQuestions.length; i++) {
-      const q = quizQuestions[i];
-      const questionId = generateUUID();
-      await db.insert(questions).values({
-        id: questionId,
-        sessionId,
-        text: q.questionText,
-        // Using defaults for type, points, and timeLimit (can be customized)
-        order: i + 1,
-      });
+    // Handle correct answers based on question type
+    if (q.type === "multi_select" && q.correctAnswers) {
+      // For multi-select questions, use the correctAnswers array
+      for (let j = 0; j < q.answers.length; j++) {
+        const optionText = q.answers[j];
+        await db.insert(options).values({
+          id: generateUUID(),
+          questionId,
+          text: optionText,
+          isCorrect: q.correctAnswers[j],
+          order: j + 1,
+        });
+      }
+    } else {
+      // For single-select questions, use the correctAnswerIndex
       for (let j = 0; j < q.answers.length; j++) {
         const optionText = q.answers[j];
         await db.insert(options).values({
@@ -547,9 +570,11 @@ if (cluster.isPrimary) {
         });
       }
     }
-    console.log(`[QUIZ] Quiz created: ${sessionName} with sessionId: ${sessionId}`);
-    return c.json({ message: "Quiz created", sessionId });
-  });
+  }
+  
+  console.log(`[QUIZ] Quiz created: ${sessionName} with sessionId: ${sessionId}`);
+  return c.json({ message: "Quiz created", sessionId });
+});
 
 
   // API Endpoint: Broadcast Auth Code – publishes the session's tap sequence to M5Stick devices.
