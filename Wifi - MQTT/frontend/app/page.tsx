@@ -73,6 +73,7 @@ export default function QuizHost() {
     }
   };
 
+
   // Start quiz session
   const startSession = async () => {
     if (!sessionId || !quizDetails) return;

@@ -8,7 +8,9 @@ interface QuestionPageProps {
   question: {
     questionText: string;
     answers: string[];
-    correctAnswerIndex: number;
+    // correctAnswerIndex: number;
+    correctAnswerIndex: number | number[]; 
+    type?: "single_select" | "multi_select";
     timestamp: number;
   };
   currentIndex: number;
