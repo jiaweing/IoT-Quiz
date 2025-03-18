@@ -1,0 +1,25 @@
+[ req ]
+default_bits       = 2048
+prompt             = no
+default_md         = sha256
+distinguished_name = dn
+req_extensions     = req_ext
+
+[ dn ]
+C  = SG
+ST = SG
+L  = SG
+O  = SIT
+OU = IOT
+CN = 192.168.1.19
+
+[ req_ext ]
+subjectAltName = @alt_names
+
+[ alt_names ]
+IP.1  = 192.168.1.19
+DNS.1 = localhost
+IP.2  = 127.0.0.1
+IP.3  = 0:0:0:0:0:0:0:1
+# You can add additional entries if needed:
+# DNS.2 = example.com

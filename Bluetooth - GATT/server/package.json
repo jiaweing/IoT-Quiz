@@ -1,0 +1,36 @@
+{
+  "name": "server",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:push": "drizzle-kit migrate",
+    "db:drop": "drizzle-kit drop",
+    "db:check": "drizzle-kit check"
+  },
+  "dependencies": {
+    "@abandonware/noble": "^1.9.2-26",
+    "@hono/node-server": "^1.13.8",
+    "@types/bleno": "^0.4.6",
+    "aedes": "^0.51.3",
+    "aedes-persistence-mongodb": "^9.1.1",
+    "aedes-server-factory": "^0.2.1",
+    "bleno": "^0.5.0",
+    "dotenv": "^16.4.7",
+    "drizzle-orm": "^0.40.0",
+    "fs": "0.0.1-security",
+    "hono": "^4.7.2",
+    "mqemitter-mongodb": "^8.1.0",
+    "mqemitter-redis": "^6.1.0",
+    "mysql2": "^3.12.0",
+    "tls": "^0.0.1",
+    "ws": "^8.18.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.17",
+    "@types/ws": "^8.18.0",
+    "drizzle-kit": "0.30.5",
+    "tsx": "^4.7.1"
+  },
+  "packageManager": "pnpm@9.15.0+sha512.76e2379760a4328ec4415815bcd6628dee727af3779aaa4c914e3944156c4299921a89f976381ee107d41f12cfa4b66681ca9c718f0668fa0831ed4c6d8ba56c"
+}
