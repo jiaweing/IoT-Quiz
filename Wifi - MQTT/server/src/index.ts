@@ -12,7 +12,7 @@ import os from "os";
 import { require } from "./cjs-loader.js";
 import { eq, and, sql, desc } from "drizzle-orm";
 import { db } from "@/db/db.js"; // Adjust the path as needed
-import { sessions, questions, options, players, responses } from "@/db/schema.js";
+import { sessions, questions, options, players, responses, deviceCredentials } from "@/db/schema.js";
 
 // Simple UUID generator
 function generateUUID() {
@@ -202,6 +202,58 @@ if (cluster.isPrimary) {
       correctOptionIds,
       timestamp: broadcastTimestamp,
     };
+
+    // Add this after broker initialization
+broker.authenticate = (client: ExtendedAedesClient,
+  username: Buffer | string | undefined,
+  password: Buffer | string | undefined,
+  callback: (error: Error | null, success: boolean) => void) => {
+  // Allow frontend dashboard to connect without authentication
+  if (client.id === "frontend_dashboard") {
+    console.log("[AUTH] Dashboard client authenticated automatically");
+    client.authenticated = true;
+    return callback(null, true);
+  }
+  
+  // Skip authentication during development if needed
+  // return callback(null, true);
+  
+  if (!username || !password) {
+    console.log(`[AUTH] Missing credentials for client ${client.id}`);
+    return callback(new Error("Username and password required"), false);
+  }
+  
+  const usernameStr = username.toString();
+  const passwordStr = password.toString();
+  
+  console.log(`[AUTH] Authenticating client ${client.id} with username: ${usernameStr}`);
+  
+  // Check credentials against database
+  db.select()
+    .from(deviceCredentials)
+    .where(
+      and(
+        eq(deviceCredentials.macAddress, usernameStr),
+        eq(deviceCredentials.password, passwordStr),
+        eq(deviceCredentials.isActive, true)
+      )
+    )
+    .limit(1)
+    .then((results) => {
+      if (results.length > 0) {
+        console.log(`[AUTH] Client ${client.id} authenticated successfully`);
+        client.authenticated = true;
+        return callback(null, true);
+      } else {
+        console.log(`[AUTH] Invalid credentials for client ${client.id}`);
+        return callback(new Error("Invalid credentials"), false);
+      }
+    })
+    .catch((error) => {
+      console.error(`[AUTH] Database error:`, error);
+      return callback(new Error("Authentication error"), false);
+    });
+};
 
     console.log("Broadcasting question payload:", payload);
   
@@ -636,6 +688,84 @@ if (cluster.isPrimary) {
       }
     }
   });
+
+
+  // Add these API endpoints to your server code where the other endpoints are defined
+
+// API Endpoint: Register Device - for M5StickC Plus registration
+app.post("/api/register-device", async (c) => {
+  try {
+    const { macAddress, deviceName, password } = await c.req.json();
+    
+    console.log("[REGISTER] Received registration request:", { macAddress, deviceName });
+    
+    if (!macAddress) {
+      console.log("[REGISTER] Missing MAC address");
+      return c.json({ success: false, error: "MAC address is required" }, 400);
+    }
+    console.log("Attempting to connect to database...");
+    // Check if device already exists
+    const existingDevices = await db.select()
+      .from(deviceCredentials)
+      .where(eq(deviceCredentials.macAddress, macAddress))
+      .limit(1)
+      .catch(err => {
+        console.error("Database SELECT error:", err);
+        throw err;
+      });
+    
+    const deviceId = generateUUID();
+    const securePassword = password || `m5_${Math.random().toString(36).substring(2, 10)}`;
+    
+    if (existingDevices.length > 0) {
+      // Update existing device
+      await db
+        .update(deviceCredentials)
+        .set({
+          password: securePassword,
+          deviceName: deviceName || existingDevices[0].deviceName,
+          isActive: true
+        })
+        .where(eq(deviceCredentials.id, existingDevices[0].id));
+      
+      console.log(`[REGISTER] Updated device: ${macAddress}`);
+      return c.json({
+        success: true,
+        message: "Device updated successfully",
+        password: securePassword
+      });
+    } else {
+      // Create new device
+      await db
+        .insert(deviceCredentials)
+        .values({
+          id: deviceId,
+          macAddress: macAddress,
+          password: securePassword,
+          deviceName: deviceName || `M5Stick-${macAddress.substring(macAddress.length - 6)}`,
+          isActive: true
+        });
+      
+      console.log(`[REGISTER] New device registered: ${macAddress}`);
+      return c.json({
+        success: true,
+        message: "Device registered successfully",
+        password: securePassword
+      });
+    }
+  } catch (error) {
+    console.error("[REGISTER] Error:", error);
+    return c.json({ 
+      success: false, 
+      error: "Failed to register device" 
+    }, 500);
+  }
+});
+
+// API Endpoint: Test endpoint for basic connectivity testing
+app.get("/api/test", (c) => {
+  return c.json({ status: "ok", message: "Server is running" });
+});
 
 
   // API Endpoint: Create Quiz – creates a session, questions, and options

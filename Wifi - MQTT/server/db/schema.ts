@@ -104,3 +104,19 @@ export const responses = mysqlTable(
     uniqueResponse: primaryKey(table.questionId, table.playerId), // One response per question per player
   })
 );
+// Device credentials for MQTT authentication
+export const deviceCredentials = mysqlTable(
+  "device_credentials",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(), // UUID
+    macAddress: varchar("mac_address", { length: 12 }).notNull().unique(), // MAC address without colons
+    password: varchar("password", { length: 100 }).notNull(),
+    deviceName: varchar("device_name", { length: 100 }),
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow(),
+  },
+  (table) => ({
+    macAddressIdx: index("mac_address_idx").on(table.macAddress),
+  })
+);

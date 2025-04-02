@@ -4,8 +4,13 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <time.h>
+#include <Preferences.h>
 #include "config.h"
 
+// Add these with your other global variables
+Preferences preferences;
+String deviceMac = "";
+String devicePassword = "";
 
 const char* mqtt_client_count_topic = "system/client_count";
 
@@ -21,14 +26,15 @@ const char* quiz_end_topic = "quiz/end";
 const char* quiz_reset_topic = "quiz/reset-quiz"; 
 
 // Generate a random client ID
-String getRandomClientId() {
-  String id = "m5stick_";
-  for (int i = 0; i < 4; i++) {
-    id += String(random(0xF), HEX);
-  }
-  return id;
-}
-String mqtt_client_id = getRandomClientId();
+// String getRandomClientId() {
+//   String id = "m5stick_";
+//   for (int i = 0; i < 4; i++) {
+//     id += String(random(0xF), HEX);
+//   }
+//   return id;
+// }
+// String mqtt_client_id = getRandomClientId();
+String mqtt_client_id = "";
 
 // Global variables
 String currentSessionId = "";
@@ -53,6 +59,7 @@ int cursorPosition = 0;
 const int maxOptionsPerPage = 7; 
 
 int currentScore = 0;
+int currentPage = 0;
 
 // WiFiClient espClient;
 WiFiClientSecure espClient;
@@ -477,10 +484,18 @@ void printCurrentTime() {
 
 void reconnect() {
   int xPos = M5.Lcd.width() - 15;
+    
   while (!client.connected()) {
     logMessage("MQTT connecting...", 2);
     M5.Lcd.fillRect(xPos, 0, 15, 15, RED);
-    if (client.connect(mqtt_client_id.c_str())) {
+    Serial.println("Attempting MQTT connection with credentials:");
+    Serial.print("Client ID: ");
+    Serial.println(mqtt_client_id);
+    Serial.print("Username (MAC): ");
+    Serial.println(deviceMac);
+    Serial.print("Password length: ");
+    Serial.println(devicePassword.length());
+    if (client.connect(mqtt_client_id.c_str(), deviceMac.c_str(), devicePassword.c_str()) ) {
       logMessage("MQTT OK!", 2);
       M5.Lcd.fillRect(xPos, 0, 15, 15, GREEN);
       client.subscribe(mqtt_client_count_topic, 1);
@@ -509,6 +524,25 @@ void setup() {
   M5.Lcd.setRotation(3);
   M5.Lcd.fillScreen(BLACK);
   M5.Lcd.setTextSize(1);
+
+  // Initialize preferences and load credentials
+  preferences.begin("mqtt-creds", true); // Read-only mode
+  deviceMac = preferences.getString("macAddress", "");
+  devicePassword = preferences.getString("password", "");
+  
+  // Check if credentials are available
+  if (deviceMac == "" || devicePassword == "") {
+    M5.Lcd.setCursor(0, 0);
+    M5.Lcd.println("No credentials found!");
+    M5.Lcd.setCursor(0, 12);
+    M5.Lcd.println("Run registration first");
+    Serial.println("ERROR: No credentials found. Please run the registration sketch first.");
+    while(1) { delay(1000); } // Halt execution
+  }
+  
+  // Generate a client ID based on the MAC address instead of random
+  mqtt_client_id = "M5Stick-" + deviceMac.substring(deviceMac.length() - 6);
+
   loadConfig();
   randomSeed(analogRead(0));
 
@@ -537,8 +571,9 @@ void loop() {
   M5.update();
   int xPos = M5.Lcd.width() - 15;
 
-  // Main page logic (existing code for joining session)
-  if (!joinedSession) {
+  if (currentPage == 0 ){
+
+    if (!joinedSession) {
     // Use BtnA for "A", BtnB for "B".
     if (M5.BtnA.wasPressed()) {
       joinSequenceInput += "A";
@@ -697,8 +732,9 @@ void loop() {
 
       }
     }
-    
-  } else if (currentPage == 1) {
+  }
+
+  }else if (currentPage == 1) {
     // Quiz page logic
       if (questionActive && totalOptions > 0) {
         if (M5.BtnA.wasPressed()) {
