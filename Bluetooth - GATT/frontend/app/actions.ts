@@ -100,3 +100,12 @@ export async function endQuizSession(sessionId: string) {
 
   return response.json();
 }
+
+export async function resetQuiz(sessionId: string) {
+  const response = await fetch(`${API_BASE}/reset-quiz`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId }),
+  });
+  return response.json();
+}

@@ -32,6 +32,7 @@ export default function QuizHost() {
     setTotalClients,
     setSessionStatus,
     setAnswerDistribution,
+    setBroadcastQuestion
   } = useWebsocket();
 
   const [step, setStep] = useState<Step>(Step.CREATE_QUIZ);
@@ -41,17 +42,29 @@ export default function QuizHost() {
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(true);
 
-  // Calculate total responses
-  const totalResponses = Object.values(answerDistribution).reduce(
-    (sum, val) => sum + Number(val),
-    0
-  );
+  const totalResponses =
+  answerDistribution && broadcastQuestion
+    ? broadcastQuestion.type === "multi_select"
+      ? answerDistribution.uniqueRespondents
+      : Object.values(answerDistribution.distribution).reduce((sum, val) => sum + Number(val), 0)
+    : 0;
+
 
   // Handle quiz creation
   const handleCreateQuiz = async (details: QuizDetails) => {
     try {
+      const formattedQuestions = details.questions.map(q => ({
+        ...q,
+        // Add default values for the new required fields if they don't exist
+        correctAnswers: q.correctAnswers ||
+          q.answers.map((_, i) => i === q.correctAnswerIndex),
+        type: q.type || "single_select"
+      }));
       const data = await actions.createQuiz(details.title, details.questions, details.tapSequence);
-      setQuizDetails(details);
+      setQuizDetails({
+        ...details,
+        questions: formattedQuestions
+      });
       setSessionId(data.sessionId);
       setShowCreateModal(false);
       setStep(Step.CONNECTED_PLAYERS);
@@ -122,7 +135,7 @@ export default function QuizHost() {
     if (!quizDetails) return;
     setCurrentQuestionIndex(0);
     setLeaderboard([]);
-    setAnswerDistribution({ "1": 0, "2": 0, "3": 0, "4": 0 });
+    setAnswerDistribution({ distribution: {}, uniqueRespondents: 0 });
     setTotalClients(0)
     setClients([])
     setSessionStatus("pending")
@@ -133,6 +146,7 @@ export default function QuizHost() {
         quizDetails.tapSequence
       );
       setSessionId(data.sessionId);
+      await actions.resetQuiz(data.sessionId);
       setStep(Step.CONNECTED_PLAYERS);
     } catch (error) {
       console.error("Failed to restart quiz:", error);
@@ -143,10 +157,11 @@ export default function QuizHost() {
   const handleRestartNew = () => {
     setQuizDetails(null);
     setSessionId(null);
+    setBroadcastQuestion(null)
     setCurrentQuestionIndex(0);
     setLeaderboard([]);
     setShowCreateModal(true);
-    setAnswerDistribution({ "1": 0, "2": 0, "3": 0, "4": 0 });
+    setAnswerDistribution({ distribution: {}, uniqueRespondents: 0 });
     setTotalClients(0)
     setClients([])
     setSessionStatus("pending")
@@ -200,8 +215,8 @@ export default function QuizHost() {
 
           {step === Step.ANSWER_REVEAL && quizDetails && (
             <AnswerReveal
-              question={quizDetails.questions[currentQuestionIndex]}
-              distribution={answerDistribution}
+              broadcastQuestion={broadcastQuestion}
+              distribution={answerDistribution || { distribution: {}, uniqueRespondents: 0 }}
               totalClients={totalClients}
               onRevealNext={handleRevealNext}
             />

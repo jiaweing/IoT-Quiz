@@ -74,9 +74,6 @@ export function ConnectedPlayers({
                     <h3 className="font-semibold">Player {client.id}</h3>
                     <Badge variant="outline">{client.score} pts</Badge>
                   </div>
-                  <p className="text-sm text-muted-foreground">
-                    IP: 
-                  </p>
                 </div>
               </CardContent>
             </Card>

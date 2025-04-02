@@ -4,7 +4,7 @@
 #include <time.h>
 #include "config.h"
 
-// Define property flags if not defined (used for setting characteristic properties)
+// Define property flags if not defined
 #ifndef NIMBLE_PROPERTY_READ
   #define NIMBLE_PROPERTY_READ 0x02
 #endif
@@ -15,59 +15,66 @@
   #define NIMBLE_PROPERTY_NOTIFY 0x10
 #endif
 
-// UUID definitions (all in hyphenated format)
+// UUID definitions
 #define QUIZ_SERVICE_UUID                  "12345678-1234-5678-1234-56789abcdef0"
 #define AUTH_CHARACTERISTIC_UUID           "abcdef01-1234-5678-1234-56789abcdef0"
 #define QUESTION_CHARACTERISTIC_UUID       "abcdef02-1234-5678-1234-56789abcdef0"
 #define QUESTION_CLOSED_CHARACTERISTIC_UUID "abcdef03-1234-5678-1234-56789abcdef0"
 #define RESPONSE_CHARACTERISTIC_UUID       "abcdef04-1234-5678-1234-56789abcdef0"
 #define SCORE_CHARACTERISTIC_UUID          "abcdef05-1234-5678-1234-56789abcdef0"
-#define DISTRIBUTION_CHARACTERISTIC_UUID     "abcdef06-1234-5678-1234-56789abcdef0"
+#define DISTRIBUTION_CHARACTERISTIC_UUID    "abcdef06-1234-5678-1234-56789abcdef0"
 #define SESSION_STATUS_CHARACTERISTIC_UUID "abcdef07-1234-5678-1234-56789abcdef0"
 #define TIME_SYNC_CHARACTERISTIC_UUID      "abcdef08-1234-5678-1234-56789abcdef0"
 
-// Global variables for quiz state tracking
-String currentSessionId = "";         // Active session ID
-String expectedTapSequence = "";        // Expected tap sequence for joining
-String joinSequenceInput = "";          // Sequence entered by user via buttons
-unsigned long lastBroadcastTime = 0;    // Timestamp for last question broadcast
-unsigned long long timeOffset = 0;      // Offset for time synchronization
-bool questionActive = false;            // True if a question is active
-bool joinedSession = false;             // True if device has joined the session
+// ------------------ Global Variables ------------------
 
-// Arrays to hold question option data
+// Quiz state variables
+String currentSessionId = "";
+String expectedTapSequence = "";
+String joinSequenceInput = "";
+unsigned long lastBroadcastTime = 0;
+unsigned long long timeOffset = 0;
+bool questionActive = false;
+bool joinedSession = false;
+
+// Option data & selection
 String optionIds[4];
 String optionTexts[4];
 int totalOptions = 0;
+
+// For single-select
 int selectedAnswer = 0;
+
+// For multi-select
+bool isMultiSelect = false;
+bool selectedOptions[4] = { false, false, false, false };
+int cursorPosition = 0; // For multi-select cursor; the SUBMIT option is at index totalOptions
+
 String currentQuestionId = "";
 unsigned long long currentQuestionTimestamp = 0;
 
-// Pointers to BLE characteristic objects
+// BLE characteristic pointers
 NimBLECharacteristic* pAuthCharacteristic;
 NimBLECharacteristic* pQuestionCharacteristic;
 NimBLECharacteristic* pQuestionClosedCharacteristic;
 NimBLECharacteristic* pResponseCharacteristic;
 NimBLECharacteristic* pSessionStatusCharacteristic;
-NimBLECharacteristic* pTimeSyncCharacteristic;  // Time sync characteristic
+NimBLECharacteristic* pTimeSyncCharacteristic;
 
-// ----------------- Display Helper Functions -----------------
+// ------------------ Display Helpers ------------------
 
-// Clear a specific line on the LCD
 void clearLine(int line) {
   int yPos = line * 12;
   M5.Lcd.fillRect(0, yPos, 135, 12, BLACK);
   M5.Lcd.setCursor(0, yPos);
 }
 
-// Print a message on a given line
 void logMessage(const char* msg, int line) {
   clearLine(line);
   M5.Lcd.setCursor(0, line * 12);
   M5.Lcd.print(msg);
 }
 
-// Display session information on the screen
 void displaySessionInfo() {
   clearLine(2);
   String s = "Session: " + currentSessionId;
@@ -80,9 +87,68 @@ void displaySessionInfo() {
   M5.Lcd.print(j);
 }
 
-// ----------------- BLE Callback Classes -----------------
+// New display function with pagination that works for both single-select and multi-select.
+const int maxOptionsPerPage = 7; // Maximum items per page
 
-// AuthCallbacks: Handles writes to the Auth characteristic.
+void displayQuizPageBLE() {
+  M5.Lcd.fillScreen(BLACK);
+  
+  // Display session ID at top
+  M5.Lcd.setCursor(0, 0);
+  M5.Lcd.print("Session: " + currentSessionId);
+  int optionsHeaderY = 12;
+  M5.Lcd.setCursor(0, optionsHeaderY);
+  M5.Lcd.print("Options:");
+  
+  // Calculate pagination details
+  int totalItems = totalOptions + 1; // +1 for the SUBMIT row
+  int startOption = (cursorPosition / maxOptionsPerPage) * maxOptionsPerPage;
+  int endOption = min(startOption + maxOptionsPerPage, totalItems);
+  
+  // Display options with cursor and selection/checkbox
+  const int optionsStartY = optionsHeaderY + 12;
+  for (int i = startOption; i < endOption; i++) {
+    M5.Lcd.setCursor(0, optionsStartY + (i - startOption) * 12);
+    
+    // Display cursor for current selection
+    if (i == cursorPosition) {
+      M5.Lcd.print("> ");
+    } else {
+      M5.Lcd.print("  ");
+    }
+    
+    // Check if this is the SUBMIT row.
+    if (i == totalOptions) {
+      M5.Lcd.print("SUBMIT");
+    } else {
+      // For multi-select, display checkboxes; for single-select, show selection based on selectedAnswer.
+      if (isMultiSelect) {
+        M5.Lcd.print(selectedOptions[i] ? "[X] " : "[ ] ");
+      } else {
+        M5.Lcd.print((selectedAnswer == i) ? "[X] " : "[ ] ");
+      }
+      
+      // Display option text; truncate if needed.
+      String displayText = optionTexts[i];
+      if (displayText.length() > 15) {
+        displayText = displayText.substring(0, 12) + "...";
+      }
+      M5.Lcd.print(displayText);
+    }
+  }
+  
+  // Display page indicator if there are multiple pages.
+  if (totalItems > maxOptionsPerPage) {
+    int currentPageNum = cursorPosition / maxOptionsPerPage + 1;
+    int totalPages = (totalItems + maxOptionsPerPage - 1) / maxOptionsPerPage;
+    M5.Lcd.setCursor(0, M5.Lcd.height() - 12);
+    M5.Lcd.printf("Page %d/%d", currentPageNum, totalPages);
+  }
+}
+
+// ------------------ BLE Callback Classes ------------------
+
+// Auth characteristic callback.
 class AuthCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) override {
     std::string value = pCharacteristic->getValue();
@@ -109,7 +175,7 @@ class AuthCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
-// QuestionCallbacks: Handles writes to the Question characteristic.
+// Question characteristic callback.
 class QuestionCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) override {
     std::string value = pCharacteristic->getValue();
@@ -132,6 +198,15 @@ class QuestionCallbacks : public NimBLECharacteristicCallbacks {
     Serial.print("Timestamp: ");
     Serial.println(currentQuestionTimestamp);
     
+    // Read question type to determine if multi-select.
+    String questionType = doc["type"].as<String>();
+    isMultiSelect = (questionType == "multi_select");
+    Serial.print("Received question type: ");
+    Serial.println(questionType);
+    Serial.print("isMultiSelect: ");
+    Serial.println(isMultiSelect);
+    
+    // Reset option arrays and selection state.
     totalOptions = 0;
     for (JsonObject option : doc["options"].as<JsonArray>()) {
       if (totalOptions < 4) {
@@ -140,13 +215,20 @@ class QuestionCallbacks : public NimBLECharacteristicCallbacks {
         totalOptions++;
       }
     }
+
+    for (int i = 0; i < totalOptions; i++) {
+      selectedOptions[i] = false;
+    }
+
     selectedAnswer = 0;
     logMessage(optionTexts[selectedAnswer].c_str(), 6);
     questionActive = true;
+    cursorPosition = 0;
+    displayQuizPageBLE();
   }
 };
 
-// QuestionClosedCallbacks: Handles writes to the Question Closed characteristic.
+// Question Closed characteristic callback.
 class QuestionClosedCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) override {
     std::string value = pCharacteristic->getValue();
@@ -159,7 +241,7 @@ class QuestionClosedCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
-// SessionStatusCallbacks: Handles writes to the Session Status characteristic.
+// Session Status characteristic callback.
 class SessionStatusCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) override {
     std::string value = pCharacteristic->getValue();
@@ -170,10 +252,9 @@ class SessionStatusCallbacks : public NimBLECharacteristicCallbacks {
     if (!err) {
       String newStatus = statusDoc["status"].as<String>();
       String msg = "Quiz " + newStatus;
-      logMessage(msg.c_str(), 8);  // Display status on line 8
-      
-      // If the status is "Completed", reset quiz state
+      logMessage(msg.c_str(), 8);
       if(newStatus == "Completed") {
+        // Reset quiz state
         joinedSession = false;
         questionActive = false;
         currentSessionId = "";
@@ -183,8 +264,6 @@ class SessionStatusCallbacks : public NimBLECharacteristicCallbacks {
         selectedAnswer = 0;
         currentQuestionId = "";
         currentQuestionTimestamp = 0;
-        
-        // Clear relevant display areas
         clearLine(2);
         clearLine(3);
         clearLine(4);
@@ -199,7 +278,7 @@ class SessionStatusCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
-// TimeSyncCallbacks: Handles writes to the Time Sync characteristic.
+// Time Sync characteristic callback.
 class TimeSyncCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) override {
     std::string value = pCharacteristic->getValue();
@@ -220,58 +299,56 @@ class TimeSyncCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
-// ----------------- BLE Setup Function -----------------
-// Initializes NimBLE, creates a service and its characteristics, and starts advertising.
+// ------------------ BLE Setup ------------------
+
 void setupBLE() {
   NimBLEDevice::init("M5StickCPlus Quiz Client");
   NimBLEServer* pServer = NimBLEDevice::createServer();
   NimBLEService* pService = pServer->createService(QUIZ_SERVICE_UUID);
   
-  // Create and set up the Auth characteristic
+  // Create and set up the Auth characteristic.
   pAuthCharacteristic = pService->createCharacteristic(
     AUTH_CHARACTERISTIC_UUID,
     NIMBLE_PROPERTY_READ | NIMBLE_PROPERTY_WRITE | NIMBLE_PROPERTY_NOTIFY
   );
   pAuthCharacteristic->setCallbacks(new AuthCallbacks());
   
-  // Create and set up the Question characteristic
+  // Create and set up the Question characteristic.
   pQuestionCharacteristic = pService->createCharacteristic(
     QUESTION_CHARACTERISTIC_UUID,
     NIMBLE_PROPERTY_READ | NIMBLE_PROPERTY_WRITE | NIMBLE_PROPERTY_NOTIFY
   );
   pQuestionCharacteristic->setCallbacks(new QuestionCallbacks());
   
-  // Create and set up the Question Closed characteristic
+  // Create and set up the Question Closed characteristic.
   pQuestionClosedCharacteristic = pService->createCharacteristic(
     QUESTION_CLOSED_CHARACTERISTIC_UUID,
     NIMBLE_PROPERTY_READ | NIMBLE_PROPERTY_WRITE | NIMBLE_PROPERTY_NOTIFY
   );
   pQuestionClosedCharacteristic->setCallbacks(new QuestionClosedCallbacks());
   
-  // Create the Response characteristic (for sending join/answer responses)
+  // Create the Response characteristic (for join/answer responses).
   pResponseCharacteristic = pService->createCharacteristic(
     RESPONSE_CHARACTERISTIC_UUID,
     NIMBLE_PROPERTY_WRITE | NIMBLE_PROPERTY_NOTIFY
   );
   
-  // Create and set up the Session Status characteristic
+  // Create and set up the Session Status characteristic.
   pSessionStatusCharacteristic = pService->createCharacteristic(
     SESSION_STATUS_CHARACTERISTIC_UUID,
     NIMBLE_PROPERTY_READ | NIMBLE_PROPERTY_WRITE | NIMBLE_PROPERTY_NOTIFY
   );
   pSessionStatusCharacteristic->setCallbacks(new SessionStatusCallbacks());
   
-  // Create and set up the Time Sync characteristic
+  // Create and set up the Time Sync characteristic.
   pTimeSyncCharacteristic = pService->createCharacteristic(
     TIME_SYNC_CHARACTERISTIC_UUID,
     NIMBLE_PROPERTY_READ | NIMBLE_PROPERTY_WRITE | NIMBLE_PROPERTY_NOTIFY
   );
   pTimeSyncCharacteristic->setCallbacks(new TimeSyncCallbacks());
   
-  // Start the service
   pService->start();
   
-  // Set up advertising: add the service UUID and set scan response data.
   NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(QUIZ_SERVICE_UUID);
   NimBLEAdvertisementData scanRespData;
@@ -282,14 +359,14 @@ void setupBLE() {
   Serial.println("BLE Advertising started");
 }
 
-// ----------------- Time Sync Helper -----------------
-// Returns the synchronized time using local millis() plus offset.
+// ------------------ Time Sync Helper ------------------
+
 unsigned long long getSynchronizedTime() {
   return millis() + timeOffset;
 }
 
-// ----------------- Generate Random Client ID -----------------
-// Generates a random client ID for display or identification.
+// ------------------ Generate Random Client ID ------------------
+
 String getRandomClientId() {
   String id = "m5stick_";
   for (int i = 0; i < 4; i++) {
@@ -299,7 +376,56 @@ String getRandomClientId() {
 }
 String clientId = getRandomClientId();
 
-// ----------------- Setup Function -----------------
+// ------------------ Single-Select Answer Function ------------------
+void sendSingleSelectAnswer() {
+  char payload[256];
+  snprintf(payload, sizeof(payload),
+                   "{\"action\":\"response\",\"questionId\":\"%s\",\"optionId\":\"%s\",\"timestamp\":%llu}",
+                   currentQuestionId.c_str(), optionIds[selectedAnswer].c_str(), getSynchronizedTime());
+  Serial.print("Sending single-select payload: ");
+  Serial.println(payload);
+  int xPos = M5.Lcd.width() - 15;
+  std::string joinStr(payload, strlen(payload));
+  pResponseCharacteristic->setValue(joinStr);
+  pResponseCharacteristic->notify();
+  logMessage("Answer sent", 7);
+}
+
+// ------------------ Multi-Select Answer Function ------------------
+
+void sendMultiSelectAnswers() {
+  int selectedCount = 0;
+  for (int i = 0; i < totalOptions; i++) {
+    if (selectedOptions[i]) selectedCount++;
+  }
+  if (selectedCount == 0) {
+    logMessage("Select at least 1", 7);
+    return;
+  }
+  
+  StaticJsonDocument<512> doc;
+  doc["action"] = "response";
+  doc["questionId"] = currentQuestionId;
+  doc["timestamp"] = getSynchronizedTime();
+  
+  JsonArray arr = doc.createNestedArray("optionIds");
+  for (int i = 0; i < totalOptions; i++) {
+    if (selectedOptions[i]) {
+      arr.add(optionIds[i]);
+    }
+  }
+  
+  String payload;
+  serializeJson(doc, payload);
+  Serial.print("Sending multi-select payload: ");
+  Serial.println(payload);
+  pResponseCharacteristic->setValue(payload.c_str());
+  pResponseCharacteristic->notify();
+  logMessage("Answers sent", 7);
+}
+
+// ------------------ Setup ------------------
+
 void setup() {
   Serial.begin(115200);
   M5.begin();
@@ -315,12 +441,12 @@ void setup() {
   logMessage(idBuf, 3);
 }
 
-// ----------------- Main Loop -----------------
-// Handles button inputs to join sessions and send quiz responses.
+// ------------------ Main Loop ------------------
+
 void loop() {
   M5.update();
   
-  // If not joined, allow tap sequence input via buttons.
+  // Before joining, handle tap sequence input.
   if (!joinedSession) {
     if (M5.BtnA.wasPressed()) {
       joinSequenceInput += "A";
@@ -340,20 +466,18 @@ void loop() {
       M5.Lcd.print("YourSeq: " + joinSequenceInput);
       delay(200);
     }
-    // Once the input length meets the expected tap sequence, validate it.
     if (expectedTapSequence.length() > 0 &&
-      joinSequenceInput.length() >= expectedTapSequence.length()) {
+        joinSequenceInput.length() >= expectedTapSequence.length()) {
       Serial.print("Expected tap sequence: ");
       Serial.println(expectedTapSequence);
       if (joinSequenceInput == expectedTapSequence) {
-        // Prepare join payload JSON with action "join"
+        // Build join payload with action "join"
         StaticJsonDocument<200> joinDoc;
         joinDoc["action"] = "join";
         joinDoc["sessionId"] = currentSessionId;
         joinDoc["auth"] = joinSequenceInput;
         String joinPayload;
         serializeJson(joinDoc, joinPayload);
-        // Write and notify the join payload on the response characteristic
         pResponseCharacteristic->setValue(joinPayload.c_str());
         pResponseCharacteristic->notify();
         Serial.print("Sent join payload: ");
@@ -369,31 +493,51 @@ void loop() {
         M5.Lcd.print("YourSeq: ");
       }
     }
-  } else {
-    // If joined and a question is active, allow answer selection.
+  }
+  else {
+    // If joined and a question is active, process answer selection.
     if (questionActive && totalOptions > 0) {
       if (M5.BtnA.wasPressed()) {
-        selectedAnswer = (selectedAnswer + 1) % totalOptions;
-        logMessage(optionTexts[selectedAnswer].c_str(), 6);
-        Serial.print("Selected option index: ");
-        Serial.println(selectedAnswer);
-        Serial.print("Option UUID: ");
-        Serial.println(optionIds[selectedAnswer]);
+        cursorPosition = (cursorPosition + 1) % (totalOptions + 1);
+        displayQuizPageBLE();
         delay(200);
       }
+
       if (M5.BtnB.wasPressed()) {
-        // Prepare answer payload JSON with action "response"
-        char payload[256];
-        snprintf(payload, sizeof(payload),
-                 "{\"action\":\"response\",\"questionId\":\"%s\",\"optionId\":\"%s\",\"timestamp\":%llu}",
-                 currentQuestionId.c_str(), optionIds[selectedAnswer].c_str(), getSynchronizedTime());
-        Serial.print("Sending answer payload: ");
-        Serial.println(payload);
-        std::string joinStr(payload, strlen(payload));
-        pResponseCharacteristic->setValue(joinStr);
-        pResponseCharacteristic->notify();
-        logMessage("Answer sent", 7);
-        delay(200);
+        if (cursorPosition == totalOptions) {
+          if (isMultiSelect) {
+            sendMultiSelectAnswers();
+          } else {
+            bool hasSelection = false;
+            for (int i = 0; i < totalOptions; i++) {
+              if (selectedAnswer == i) {
+                hasSelection = true;
+                break;
+              }
+            }
+          
+            if (hasSelection) {
+              sendSingleSelectAnswer();
+            } else {
+              // Display a message if no option is selected
+              M5.Lcd.setCursor(0, M5.Lcd.height() - 36);
+              M5.Lcd.print("Select an option first!");
+              delay(1000);
+              displayQuizPageBLE(); // Redraw the page
+            }
+          }
+        } else {
+
+          if (isMultiSelect) {
+              selectedOptions[cursorPosition] = !selectedOptions[cursorPosition];
+            } else {
+              // For single select, just update the selection
+              selectedAnswer = cursorPosition;
+            }
+            displayQuizPageBLE();
+          }
+          
+          delay(200);
       }
     }
   }

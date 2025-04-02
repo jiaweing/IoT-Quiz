@@ -4,6 +4,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { useEffect, useState } from "react";
 
+
+
 interface QuestionPageProps {
   question: {
     questionText: string;
@@ -25,6 +27,7 @@ export function QuestionPage({
   totalQuestions,
   onNextQuestion,
   totalResponses,
+
 }: QuestionPageProps) {
   const maxTime = 30000; // 30 seconds in ms
   const [currentTime, setCurrentTime] = useState(Date.now());
@@ -64,11 +67,21 @@ export function QuestionPage({
           </Badge>
         </div>
         <p className="text-lg text-white">{question.questionText}</p>
+        {question.type === "multi_select" && (
+          <Badge variant="outline" className="self-start text-white">
+            Select Multiple Answers
+          </Badge>
+        )}
+        {question.type === "single_select" && (
+          <Badge variant="outline" className="self-start text-white">
+            Select Single Answer
+          </Badge>
+        )}
       </div>
 
       <div className="space-y-2">
         <Progress value={progressValue} className="h-2" />
-        <p className="text-sm  text-white text-muted-foreground text-center">
+        <p className="text-sm text-white text-muted-foreground text-center">
           {timeLeftSec} seconds remaining
         </p>
       </div>

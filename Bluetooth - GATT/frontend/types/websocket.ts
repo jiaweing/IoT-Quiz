@@ -15,3 +15,8 @@ export interface BroadcastQuestion {
 export interface AnswerDistribution {
   [key: string]: number;
 }
+
+export interface DistributionPayload {
+  distribution: { [key: string]: number };
+  uniqueRespondents: number;
+}

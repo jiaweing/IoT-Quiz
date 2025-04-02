@@ -1,17 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { ClientInfo } from "@/types/websocket";
+import { ClientInfo, DistributionPayload } from "@/types/websocket";
 
 export function useWebsocket() {
   const [clients, setClients] = useState<ClientInfo[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [totalClients, setTotalClients] = useState(0);
   const [sessionStatus, setSessionStatus] = useState("pending");
-  const [answerDistribution, setAnswerDistribution] = useState<{ [key: string]: number }>({
-    "1": 0,
-    "2": 0,
-    "3": 0,
-    "4": 0,
-  });
+  const [answerDistribution, setAnswerDistribution] = useState<DistributionPayload | null>(null);
   const [broadcastQuestion, setBroadcastQuestion] = useState<any>(null);
 
   const socketRef = useRef<WebSocket | null>(null);
@@ -37,6 +32,7 @@ export function useWebsocket() {
         // Expecting messages with a "type" and a "payload" property.
         switch (data.type) {
           case "question":
+            setAnswerDistribution({ distribution: {}, uniqueRespondents: 0 });
             setBroadcastQuestion(data.payload);
             break;
           case "score":
@@ -104,6 +100,7 @@ export function useWebsocket() {
     setClients,
     setTotalClients,
     setSessionStatus,
+    setBroadcastQuestion,
     broadcastQuestion,
     sessionStatus,
   };

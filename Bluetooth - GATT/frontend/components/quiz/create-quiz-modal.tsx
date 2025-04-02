@@ -3,6 +3,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Checkbox } from "@/components/ui/checkbox";
+
 import {
   Select,
   SelectContent,
@@ -26,15 +28,58 @@ export function CreateQuizModal({ onClose, onCreate }: CreateQuizModalProps) {
       questionText: "",
       answers: ["", "", "", ""],
       correctAnswerIndex: 0,
+      correctAnswers: [false, false, false, false],
+    type: "single_select" as "single_select" | "multi_select",
     },
   ]);
-
   const handleAddQuestion = () => {
-    setQuestions((prev) => [
-      ...prev,
-      { questionText: "", answers: ["", "", "", ""], correctAnswerIndex: 0 },
-    ]);
+    const newQuestions = [
+      ...questions,
+      {
+        questionText: "",
+        answers: ["", "", "", ""],
+        correctAnswerIndex: 0,
+        correctAnswers: [false, false, false, false],
+        type: "single_select" as "single_select" | "multi_select",
+      },
+    ];
+    console.log("Adding new question. Total questions:", newQuestions.length);
+    setQuestions(newQuestions);
   };
+
+  // Add a function to handle question type change
+const handleQuestionTypeChange = (qIndex: number, type: string) => {
+  const updated = [...questions];
+  updated[qIndex].type = type as "single_select" | "multi_select";
+  
+  // If changing to single_select and multiple are selected, keep only the first selected
+  if (type === "single_select") {
+    const firstSelectedIndex = updated[qIndex].correctAnswers.indexOf(true);
+    if (firstSelectedIndex !== -1) {
+      updated[qIndex].correctAnswers = updated[qIndex].correctAnswers.map((_, i) => i === firstSelectedIndex);
+      updated[qIndex].correctAnswerIndex = firstSelectedIndex;
+    }
+  }
+  
+  setQuestions(updated);
+};
+
+// Add a function to toggle correct answers
+const toggleAnswerCorrect = (qIndex: number, ansIndex: number) => {
+  const updated = [...questions];
+  const question = updated[qIndex];
+  
+  if (question.type === "single_select") {
+    // For single selection, uncheck all others
+    question.correctAnswers = question.correctAnswers.map((_, i) => i === ansIndex);
+    question.correctAnswerIndex = ansIndex;
+  } else {
+    // For multiple selection, toggle the current one
+    question.correctAnswers[ansIndex] = !question.correctAnswers[ansIndex];
+  }
+  
+  setQuestions(updated);
+};
 
   const handleCreate = () => {
     onCreate({ title, questions, tapSequence });
@@ -54,7 +99,7 @@ export function CreateQuizModal({ onClose, onCreate }: CreateQuizModalProps) {
             Welcome to Quizzle
           </h2>
         </header>
-        <Card>
+        <Card className="w-full max-w-2xl">
           <CardContent className="p-6">
             <h2 className="text-2xl font-bold mb-6">Create Quiz</h2>
             <div className="space-y-6">
@@ -75,68 +120,72 @@ export function CreateQuizModal({ onClose, onCreate }: CreateQuizModalProps) {
                 />
               </div>
 
-              <ScrollArea className="h-[400px] pr-4">
-                <div className="space-y-4">
-                  {questions.map((q, qIndex) => (
-                    <Card key={qIndex} className="p-4">
-                      <div className="space-y-4">
-                        <div className="space-y-2">
-                          <Label>Question {qIndex + 1}</Label>
+            <ScrollArea className="h-[400px] pr-4">
+              <div className="space-y-4">
+              {questions.map((q, qIndex) => (
+                <Card key={qIndex} className="p-4">
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label>Question {qIndex + 1}</Label>
+                      <Input
+                        placeholder="Enter question"
+                        value={q.questionText}
+                        onChange={(e) => {
+                          const updated = [...questions];
+                          updated[qIndex].questionText = e.target.value;
+                          setQuestions(updated);
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Question Type</Label>
+                      <Select
+                        value={q.type}
+                        onValueChange={(value) => handleQuestionTypeChange(qIndex, value)}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="Select question type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="single_select">Single Answer</SelectItem>
+                          <SelectItem value="multi_select">Multiple Answers</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {q.answers.map((ans, ansIndex) => (
+                        <div key={ansIndex} className="space-y-2 border p-3 rounded-md">
+                          <div className="flex items-center justify-between">
+                            <Label>Answer {ansIndex + 1}</Label>
+                            <div className="flex items-center space-x-2">
+                              <Checkbox
+                                id={`q${qIndex}-a${ansIndex}`}
+                                checked={q.correctAnswers[ansIndex]}
+                                onCheckedChange={() => toggleAnswerCorrect(qIndex, ansIndex)}
+                              />
+                              <Label htmlFor={`q${qIndex}-a${ansIndex}`} className="text-sm font-normal">
+                                Correct
+                              </Label>
+                            </div>
+                          </div>
                           <Input
-                            placeholder="Enter question"
-                            value={q.questionText}
+                            placeholder={`Option ${ansIndex + 1}`}
+                            value={ans}
                             onChange={(e) => {
                               const updated = [...questions];
-                              updated[qIndex].questionText = e.target.value;
+                              updated[qIndex].answers[ansIndex] = e.target.value;
                               setQuestions(updated);
                             }}
                           />
                         </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          {q.answers.map((ans, ansIndex) => (
-                            <div key={ansIndex} className="space-y-2">
-                              <Label>Answer {ansIndex + 1}</Label>
-                              <Input
-                                placeholder={`Option ${ansIndex + 1}`}
-                                value={ans}
-                                onChange={(e) => {
-                                  const updated = [...questions];
-                                  updated[qIndex].answers[ansIndex] = e.target.value;
-                                  setQuestions(updated);
-                                }}
-                              />
-                            </div>
-                          ))}
-                        </div>
-
-                        <div className="space-y-2">
-                          <Label>Correct Answer</Label>
-                          <Select
-                            value={q.correctAnswerIndex.toString()}
-                            onValueChange={(value) => {
-                              const updated = [...questions];
-                              updated[qIndex].correctAnswerIndex = Number(value);
-                              setQuestions(updated);
-                            }}
-                          >
-                            <SelectTrigger>
-                              <SelectValue placeholder="Select correct answer" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {q.answers.map((_, i) => (
-                                <SelectItem key={i} value={i.toString()}>
-                                  Answer {i + 1}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </div>
-                    </Card>
-                  ))}
-                </div>
-              </ScrollArea>
+                      ))}
+                    </div>
+                  </div>
+                </Card>
+              ))}
+              </div>
+            </ScrollArea>
 
               <div className="flex flex-col sm:flex-row gap-2 justify-between">
                 <Button onClick={handleAddQuestion} variant="secondary">

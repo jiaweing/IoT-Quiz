@@ -53,7 +53,7 @@ const connectedClients = new Map<string, ClientDevice>();
 
 // Active session and question tracking (as before)
 let activeSession: string | null = null; // Active quiz session
-let currentAnswerDistribution: { [key: string]: number } = { "1": 0, "2": 0, "3": 0, "4": 0 };
+let currentAnswerDistribution: { [key: string]: Set<string> } = { };
 const questionTimestamps = new Map<string, number>();
 
 let wss: WebSocketServer; // Will be assigned later
@@ -159,63 +159,67 @@ noble.on("discover", (peripheral) => {
   // --- BLE Response Data Handler ---
 // This function processes data received (via notifications) on the response characteristic.
 function handleResponseData(device: ClientDevice, data: Buffer) {
-    try {
-      console.log("Received BLE response from", device.id, data.toString().trim())
-      const payload = JSON.parse(data.toString().trim());
-      console.log("Received BLE response from", device.id, payload);
-      if (payload.action === "join") {
-        if (activeSession === "active") {
-          console.log(`[SECURITY] Reject join from ${device.id} – quiz already started.`);
-          return;
-        }
-        const sessionIdFromPayload: string = payload.sessionId;
-        const submittedSequence: string = payload.auth;
-        // Look up session in DB
-        db.select()
-          .from(sessions)
-          .where(eq(sessions.id, sessionIdFromPayload))
-          .limit(1)
-          .then((sessionInfo) => {
-            if (sessionInfo.length === 0) {
-              console.error("Session not found.");
-              return;
-            }
-            const sessionRecord = sessionInfo[0];
-            if (submittedSequence !== sessionRecord.tapSequence) {
-              console.error(`[SECURITY] Invalid tap sequence from device ${device.id}.`);
-              return;
-            }
-            // Mark the device as authenticated and record the session
-            device.authenticated = true;
-            device.session = sessionIdFromPayload;
-            broadcastWsMessage("clientInfo", { id: device.id, connected: true, authenticated: true });
-            broadcastWsMessage("clientCount", connectedClients.size);
-            // Insert or update player record
-            db.select()
-              .from(players)
-              .where(
-                and(eq(players.deviceId, device.id), eq(players.sessionId, sessionIdFromPayload))
-              )
-              .limit(1)
-              .then(async (existing) => {
-                if (existing.length === 0) {
-                  await db.insert(players).values({
-                    id: generateUUID(),
-                    sessionId: sessionIdFromPayload,
-                    deviceId: device.id,
-                    name: device.name,
-                    score: 0,
-                  });
-                }
-              })
-              .catch((err) => console.error("DB error inserting player:", err));
-          })
-          .catch((err) => console.error("DB error retrieving session:", err));
-      } else if (payload.action === "response") {
-        if (!activeSession) return;
-        if (device.session !== activeSession) return;
-        (async () => {
-          try {
+  try {
+    console.log("Received BLE response from", device.id, data.toString().trim());
+    const payload = JSON.parse(data.toString().trim());
+    console.log("Received BLE response from", device.id, payload);
+    
+    if (payload.action === "join") {
+      if (activeSession === "active") {
+        console.log(`[SECURITY] Reject join from ${device.id} – quiz already started.`);
+        return;
+      }
+      const sessionIdFromPayload: string = payload.sessionId;
+      const submittedSequence: string = payload.auth;
+      // Look up session in DB
+      db.select()
+        .from(sessions)
+        .where(eq(sessions.id, sessionIdFromPayload))
+        .limit(1)
+        .then((sessionInfo) => {
+          if (sessionInfo.length === 0) {
+            console.error("Session not found.");
+            return;
+          }
+          const sessionRecord = sessionInfo[0];
+          if (submittedSequence !== sessionRecord.tapSequence) {
+            console.error(`[SECURITY] Invalid tap sequence from device ${device.id}.`);
+            return;
+          }
+          // Mark the device as authenticated and record the session
+          device.authenticated = true;
+          device.session = sessionIdFromPayload;
+          broadcastWsMessage("clientInfo", { id: device.id, connected: true, authenticated: true });
+          broadcastWsMessage("clientCount", connectedClients.size);
+          // Insert or update player record
+          db.select()
+            .from(players)
+            .where(
+              and(eq(players.deviceId, device.id), eq(players.sessionId, sessionIdFromPayload))
+            )
+            .limit(1)
+            .then(async (existing) => {
+              if (existing.length === 0) {
+                await db.insert(players).values({
+                  id: generateUUID(),
+                  sessionId: sessionIdFromPayload,
+                  deviceId: device.id,
+                  name: device.name,
+                  score: 0,
+                });
+              }
+            })
+            .catch((err) => console.error("DB error inserting player:", err));
+        })
+        .catch((err) => console.error("DB error retrieving session:", err));
+    } else if (payload.action === "response") {
+      if (!activeSession) return;
+      if (device.session !== activeSession) return;
+      (async () => {
+        try {
+          // Check for single-select vs. multi-select payload
+          if (payload.optionId) {
+            // ----- Single-select branch (unchanged) -----
             // Verify question exists
             const qResult = await db
               .select()
@@ -276,17 +280,8 @@ function handleResponseData(device: ClientDevice, data: Buffer) {
               const prevPoints = existingResponse[0].pointsAwarded || 0;
               device.score -= prevPoints;
               const prevOptionId = existingResponse[0].optionId;
-              const prevOptionResult = await db
-                .select()
-                .from(options)
-                .where(eq(options.id, prevOptionId))
-                .limit(1);
-              if (prevOptionResult.length > 0) {
-                const prevOrder = prevOptionResult[0].order;
-                currentAnswerDistribution[String(prevOrder)] = Math.max(
-                  0,
-                  (currentAnswerDistribution[String(prevOrder)] || 0) - 1
-                );
+              if (currentAnswerDistribution[prevOptionId]) {
+                currentAnswerDistribution[prevOptionId].delete(device.id);
               }
               await db
                 .update(responses)
@@ -318,24 +313,139 @@ function handleResponseData(device: ClientDevice, data: Buffer) {
               .set({ score: device.score })
               .where(eq(players.deviceId, device.id));
             broadcastWsMessage("score", { id: device.id, score: device.score });
-            // Update answer distribution based on the option's order.
-            const optionOrder = optionRecord.order;
-            currentAnswerDistribution[optionOrder.toString()] =
-              (currentAnswerDistribution[optionOrder.toString()] || 0) + 1;
-            broadcastWsMessage("distribution", currentAnswerDistribution);
+            currentAnswerDistribution[optionRecord.id].add(device.id);
+            const distributionToPublish: { [key: string]: number } = {};
+            const unionSet = new Set<string>();
+            for (const [optId, clientSet] of Object.entries(currentAnswerDistribution)) {
+              distributionToPublish[optId] = clientSet.size;
+              for (const cid of clientSet) {
+                unionSet.add(cid);
+              }
+            }
+            const uniqueRespondents = unionSet.size;
+            broadcastWsMessage("distribution", { distribution: distributionToPublish, uniqueRespondents });
             console.log(
               `[QUIZ] ${device.id} answered ${isCorrect ? "correctly" : "incorrectly"}. New score: ${device.score}`
             );
-          } catch (dbErr) {
-            console.error("DB Error processing quiz response:", dbErr);
+          } else if (payload.optionIds) {
+            // ----- Multi-select branch -----
+            const submittedOptionIds: string[] = payload.optionIds;
+            // Retrieve the question record.
+            const qResult = await db
+              .select()
+              .from(questions)
+              .where(eq(questions.id, payload.questionId))
+              .limit(1);
+            if (qResult.length === 0) {
+              console.error("Question not found in DB");
+              return;
+            }
+            const questionRecord = qResult[0];
+            // Retrieve correct options (where isCorrect is true)
+            const correctOptionsResult = await db
+              .select()
+              .from(options)
+              .where(and(eq(options.questionId, payload.questionId), eq(options.isCorrect, true)));
+            const correctOptionIds: string[] = correctOptionsResult.map((opt: any) => opt.id);
+            // Sort both arrays for comparison.
+            submittedOptionIds.sort();
+            correctOptionIds.sort();
+            const exactMatch = JSON.stringify(submittedOptionIds) === JSON.stringify(correctOptionIds);
+            const maxAllowedTime = 30000;
+            const questionBroadcastTimestamp = questionTimestamps.get(payload.questionId);
+            let computedResponseTime = 0;
+            if (questionBroadcastTimestamp) {
+              computedResponseTime = Number(payload.timestamp) - questionBroadcastTimestamp;
+            } else {
+              console.log("Computed response time: ERROR");
+            }
+            const timeFactor =
+              computedResponseTime < maxAllowedTime ? 1 - (computedResponseTime / maxAllowedTime) : 0;
+            const allocatedPoints = questionRecord.points || 0;
+            const pointsAwarded = exactMatch ? Math.round(allocatedPoints * timeFactor) : 0;
+            // Retrieve any existing multi-select responses for this player and question.
+            const existingResponses = await db
+              .select()
+              .from(responses)
+              .where(
+                and(
+                  eq(responses.playerId, device.id),
+                  eq(responses.questionId, payload.questionId),
+                  eq(responses.sessionId, activeSession)
+                )
+              ).limit(1);
+            console.log("Existing response result:", existingResponses);
+            let prevPoints = 0;
+            for (const resp of existingResponses) {
+              prevPoints += resp.pointsAwarded || 0;
+            }
+            const delta = pointsAwarded - prevPoints;
+            device.score += delta;
+            if (device.score < 0) device.score = 0;
+            if (existingResponses.length > 0) {
+              // Remove previous multi-select responses.
+              await db.delete(responses)
+                .where(
+                  and(
+                    eq(responses.playerId, device.id),
+                    eq(responses.questionId, payload.questionId),
+                    eq(responses.sessionId, activeSession)
+                  )
+                );
+            }
+            // Insert a row for each submitted option.
+            for (const optId of submittedOptionIds) {
+              await db.insert(responses).values({
+                id: generateUUID(),
+                sessionId: activeSession,
+                questionId: payload.questionId,
+                playerId: device.id,
+                optionId: optId,
+                responseTime: computedResponseTime,
+                isCorrect: exactMatch, // Mark as correct only if the submission exactly matches.
+                pointsAwarded: exactMatch ? pointsAwarded : 0,
+              });
+            }
+            await db
+              .update(players)
+              .set({ score: device.score })
+              .where(eq(players.deviceId, device.id));
+            broadcastWsMessage("score", { id: device.id, score: device.score });
+            // Update answer distribution for each submitted option.
+            for (const [optId, clientSet] of Object.entries(currentAnswerDistribution)) {
+              clientSet.delete(device.id);
+            }
+            for (const optId of submittedOptionIds) {
+              if (currentAnswerDistribution[optId]) {
+                currentAnswerDistribution[optId].add(device.id);
+              }
+            }
+            const distributionToPublish: { [key: string]: number } = {};
+            const unionSet = new Set<string>();
+            for (const [optId, clientSet] of Object.entries(currentAnswerDistribution)) {
+              distributionToPublish[optId] = clientSet.size;
+              for (const cid of clientSet) {
+                unionSet.add(cid);
+              }
+            }
+            const uniqueRespondents = unionSet.size;
+            broadcastWsMessage("distribution", { distribution: distributionToPublish, uniqueRespondents });
+            console.log(
+              `[QUIZ] ${device.id} multi-select processed. Exact match: ${exactMatch}, Points: ${pointsAwarded}`
+            );
+          } else {
+            console.error("No valid option field in response payload.");
           }
-        })();
-      } else {
-        console.error("Unknown action in BLE response payload.");
-      }
-    } catch (err) {
-      console.error("Error handling response data:", err);
+        } catch (dbErr) {
+          console.error("DB Error processing quiz response:", dbErr);
+        }
+      })();
+    } else {
+      console.error("Unknown action in BLE response payload.");
     }
+  } catch (err) {
+    console.error("Error handling response data:", err);
+  }
 }
 
 
@@ -417,17 +527,35 @@ app.post("/api/quiz/create", async (c) => {
         id: questionId,
         sessionId,
         text: q.questionText,
+        type: q.type, 
         order: i + 1,
       });
-      for (let j = 0; j < q.answers.length; j++) {
-        const optionText = q.answers[j];
-        await db.insert(options).values({
-          id: generateUUID(),
-          questionId,
-          text: optionText,
-          isCorrect: j === q.correctAnswerIndex,
-          order: j + 1,
-        });
+  
+      // Handle correct answers based on question type
+      if (q.type === "multi_select" && q.correctAnswers) {
+        // For multi-select questions, use the correctAnswers array
+        for (let j = 0; j < q.answers.length; j++) {
+          const optionText = q.answers[j];
+          await db.insert(options).values({
+            id: generateUUID(),
+            questionId,
+            text: optionText,
+            isCorrect: q.correctAnswers[j],
+            order: j + 1,
+          });
+        }
+      } else {
+        // For single-select questions, use the correctAnswerIndex
+        for (let j = 0; j < q.answers.length; j++) {
+          const optionText = q.answers[j];
+          await db.insert(options).values({
+            id: generateUUID(),
+            questionId,
+            text: optionText,
+            isCorrect: j === q.correctAnswerIndex,
+            order: j + 1,
+          });
+        }
       }
     }
     console.log(`[QUIZ] Quiz created: ${sessionName} with sessionId: ${sessionId}`);
@@ -512,6 +640,39 @@ app.post("/api/quiz/end", async (c) => {
     return c.json({ message: "Quiz ended", sessionId });
 });
 
+// API Endpoint: Reset Scores – resets the score for all players in a session to 0
+app.post("/api/quiz/reset-quiz", async (c) => {
+  const { sessionId } = await c.req.json();
+  if (!sessionId) return c.text("Session ID required", 400);
+
+  // Update all players in the DB for this session to have a score of 0.
+  await db.update(players)
+    .set({ score: 0 })
+    .where(eq(players.sessionId, sessionId));
+
+  // Filter connected devices that belong to the session and update their score property.
+  connectedClients.forEach((device) => {
+    if (device.session === sessionId && device.characteristics.score) {
+      device.score = 0;
+      const payload = { id: device.id, score: 0 };
+      device.characteristics.score.write(
+        Buffer.from(JSON.stringify(payload)),
+        false,
+        (err) => {
+          if (err) {
+            console.error(`Error updating score for device ${device.id}:`, err);
+          } else {
+            console.log(`Score reset for device ${device.id}`);
+          }
+        }
+      );
+    }
+  });
+
+  return c.json({ message: "Quiz scores reset", sessionId });
+});
+
+
 
 // --- Helper: Broadcast Current Question ---
 async function broadcastCurrentQuestion(sessionId: string, questionIndex: number = 0) {
@@ -545,14 +706,21 @@ async function broadcastCurrentQuestion(sessionId: string, questionIndex: number
       .where(eq(options.questionId, questionData.id))
       .orderBy(options.order);
   
-    currentAnswerDistribution = { "1": 0, "2": 0, "3": 0, "4": 0 };
+    currentAnswerDistribution = {};
+    optionsResult.forEach((opt: any) => {
+      currentAnswerDistribution[opt.id] = new Set();
+    });
+
     const broadcastTimestamp = Date.now();
     questionTimestamps.set(questionData.id, broadcastTimestamp);
-  
+
+    const correctOptionIds = optionsResult.filter((opt:any) => opt.isCorrect).map((opt:any) => opt.id);
     const payload = {
       id: questionData.id,
       text: questionData.text,
+      type: questionData.type,
       options: optionsResult.map(opt => ({ id: opt.id, text: opt.text })),
+      correctOptionIds,
       timestamp: broadcastTimestamp
     };
   
@@ -583,33 +751,6 @@ wss = new WebSocketServer({ server });
 
 wss.on("connection", (ws) => {
   console.log("WebSocket client connected");
-
-  // Listen for messages from the client
-  ws.on("message", (data) => {
-    try {
-      const message = JSON.parse(data.toString());
-      console.log("Received message:", message);
-
-      // Example: handle different message types
-      switch (message.type) {
-        case "join":
-          // Process join message
-          console.log("Join request received", message.payload);
-          ws.send(JSON.stringify({ type: "joinResponse", payload: "Join request received" }));
-          // For instance, you might validate the join request, update client records, etc.
-          break;
-        case "response":
-          // Process quiz response
-          console.log("Quiz response received", message.payload);
-          break;
-        // Add more case blocks as needed for your quiz application.
-        default:
-          console.log("Unhandled message type:", message.type);
-      }
-    } catch (err) {
-      console.error("Error parsing message:", err);
-    }
-  });
 
   ws.on("close", () => {
     console.log("WebSocket client disconnected");
