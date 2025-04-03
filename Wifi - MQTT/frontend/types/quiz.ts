@@ -14,6 +14,7 @@ export interface QuizDetails {
 export interface Client {
   id: string;
   ip: string;
+  name: string,
   score: number;
   authenticated: boolean;
 }

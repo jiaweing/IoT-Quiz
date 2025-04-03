@@ -69,16 +69,16 @@ void setup() {
   Serial.println(macAddress);
   
   // Generate a device name
-  String deviceName = "M5Stick-" + macAddress.substring(macAddress.length() - 6);
+  // String deviceName = "M5Stick-" + macAddress.substring(macAddress.length() - 6);
   
   // Generate a random password
   String password = "Pass" + String(random(10000, 99999));
   
   // Register with server using HTTPS
-  registerDevice(macAddress, deviceName, password);
+  registerDevice(macAddress, PLAYER_NAME, password);
 }
   
-void registerDevice(String macAddress, String deviceName, String password) {
+void registerDevice(String macAddress, String playerName, String password) {
   M5.Lcd.setCursor(0, 36);
   M5.Lcd.print("Registering device...");
   
@@ -109,7 +109,7 @@ void registerDevice(String macAddress, String deviceName, String password) {
   // Create JSON payload - explicitly convert to strings to avoid 'any' type errors
   StaticJsonDocument<256> doc;
   doc["macAddress"] = String(macAddress);
-  doc["deviceName"] = String(deviceName);
+  doc["playerName"] = String(playerName);
   doc["password"] = String(password);
   
   String payload;

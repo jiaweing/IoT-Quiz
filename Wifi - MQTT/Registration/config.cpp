@@ -4,7 +4,7 @@ const char* WIFI_SSID = nullptr;
 const char* WIFI_PASSWORD = nullptr;
 const char* MQTT_SERVER = nullptr;
 const int MQTT_PORT = 8883;
-const char* MQTT_PASSWORD = nullptr;  
+const char* PLAYER_NAME = nullptr;  
 const char* CA_CERT = R"EOF(= "-----BEGIN CERTIFICATE-----
 xx
 xx
@@ -15,6 +15,6 @@ void loadConfig() {
   WIFI_SSID = "XXX";
   WIFI_PASSWORD = "XXX";
   MQTT_SERVER = "XXX";
-  MQTT_PASSWORD = "XXX";
+  PLAYER_NAME = "XXX";
 }
 

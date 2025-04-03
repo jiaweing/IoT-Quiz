@@ -172,6 +172,7 @@ export default function QuizHost() {
     ...client,
     score: client.score || 0,
     authenticated: client.authenticated ?? false, // default value if missing
+    name: client.name
   }));
 
   const authenticatedClients = connectedClients.filter(client => client.authenticated);

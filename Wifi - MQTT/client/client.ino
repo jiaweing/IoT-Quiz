@@ -7,10 +7,6 @@
 #include <Preferences.h>
 #include "config.h"
 
-// Add these with your other global variables
-Preferences preferences;
-String deviceMac = "";
-String devicePassword = "";
 
 const char* mqtt_client_count_topic = "system/client_count";
 
@@ -25,15 +21,11 @@ const char* quiz_auth_topic = "quiz/auth";
 const char* quiz_end_topic = "quiz/end"; 
 const char* quiz_reset_topic = "quiz/reset-quiz"; 
 
-// Generate a random client ID
-// String getRandomClientId() {
-//   String id = "m5stick_";
-//   for (int i = 0; i < 4; i++) {
-//     id += String(random(0xF), HEX);
-//   }
-//   return id;
-// }
-// String mqtt_client_id = getRandomClientId();
+// Add these with your other global variables
+ Preferences preferences;
+ String deviceMac = "";
+ String devicePassword = "";
+
 String mqtt_client_id = "";
 
 // Global variables
@@ -59,7 +51,6 @@ int cursorPosition = 0;
 const int maxOptionsPerPage = 7; 
 
 int currentScore = 0;
-int currentPage = 0;
 
 // WiFiClient espClient;
 WiFiClientSecure espClient;
@@ -379,7 +370,6 @@ void callback(char* topic, byte* payload, unsigned int length) {
   if (strcmp(topic, quiz_question_closed_topic) == 0) {
     Serial.println("Question Closed: " + currentQuestionId);
     questionActive = false;
-    currentPage = 0; 
     clearLine(6);
     logMessage("Question Ended", 6);
     return;
@@ -433,10 +423,19 @@ void callback(char* topic, byte* payload, unsigned int length) {
   // Listen for the "reset-quiz" topic.
   if (strcmp(topic, "quiz/reset-quiz") == 0) {
     Serial.println("Reset-quiz message received.");
-    // You might optionally check the payload to ensure it comes from a trusted source.
-    // For example, verify that it contains a session ID that you expect.
+    StaticJsonDocument<200> resetDoc;
+    DeserializationError err = deserializeJson(resetDoc, message);
+    if (err) {
+      Serial.print("Reset payload parse error: ");
+      Serial.println(err.f_str());
+      return;
+    }
+    // Get the sessionId from the payload.
+    String sessionIdFromReset = resetDoc["sessionId"].as<String>();
+    Serial.print("Reset session ID: ");
+    Serial.println(sessionIdFromReset);
     joinedSession = true;
-    String joinPayload = String("{\"sessionId\":\"") + currentSessionId + "\",\"auth\":\"" + expectedTapSequence + "\"}";
+    String joinPayload = String("{\"sessionId\":\"") + sessionIdFromReset + "\",\"auth\":\"" + expectedTapSequence + "\"}";
     Serial.print("Auto-join payload: ");
     Serial.println(joinPayload);
     if (client.publish(quiz_join_topic, joinPayload.c_str())) {
@@ -484,11 +483,10 @@ void printCurrentTime() {
 
 void reconnect() {
   int xPos = M5.Lcd.width() - 15;
-    
   while (!client.connected()) {
     logMessage("MQTT connecting...", 2);
-    M5.Lcd.fillRect(xPos, 0, 15, 15, RED);
     Serial.println("Attempting MQTT connection with credentials:");
+    M5.Lcd.fillRect(xPos, 0, 15, 15, RED);
     Serial.print("Client ID: ");
     Serial.println(mqtt_client_id);
     Serial.print("Username (MAC): ");
@@ -525,7 +523,6 @@ void setup() {
   M5.Lcd.fillScreen(BLACK);
   M5.Lcd.setTextSize(1);
 
-  // Initialize preferences and load credentials
   preferences.begin("mqtt-creds", true); // Read-only mode
   deviceMac = preferences.getString("macAddress", "");
   devicePassword = preferences.getString("password", "");
@@ -571,9 +568,8 @@ void loop() {
   M5.update();
   int xPos = M5.Lcd.width() - 15;
 
-  if (currentPage == 0 ){
-
-    if (!joinedSession) {
+  // Main page logic (existing code for joining session)
+  if (!joinedSession) {
     // Use BtnA for "A", BtnB for "B".
     if (M5.BtnA.wasPressed()) {
       joinSequenceInput += "A";
@@ -670,118 +666,6 @@ void loop() {
         }
         delay(200);
       }
-      // If input length equals expected tap sequence length, check if it matches.
-      if (expectedTapSequence.length() > 0 &&
-          joinSequenceInput.length() >= expectedTapSequence.length()) {
-          Serial.print("Tap input: ");
-          Serial.println(expectedTapSequence);  
-        if (joinSequenceInput == expectedTapSequence) {
-          // Publish join payload.
-          String joinPayload = String("{\"sessionId\":\"") + currentSessionId + "\",\"auth\":\"" + joinSequenceInput + "\"}";
-          Serial.print("Publishing join payload: ");
-          Serial.println(joinPayload);
-          if (client.publish(quiz_join_topic, joinPayload.c_str())) {
-            Serial.println("Joined session successfully");
-            joinedSession = true;
-            clearLine(5);
-            logMessage("Joined Session", 5);
-          } else {
-            Serial.println("Failed to send join message");
-          }
-        } else {
-          Serial.println("Incorrect tap sequence. Resetting input.");
-          joinSequenceInput = "";
-          clearLine(4);
-          M5.Lcd.setCursor(0, 4 * 12);
-          M5.Lcd.print("YourSeq: ");
-        }
-      }
-      else {
-        // If joined and a question is active, allow answer selection.
-        if (questionActive && totalOptions > 0) {
-          if (M5.BtnA.wasPressed()) {
-            // Navigate through options
-            selectedAnswer = (selectedAnswer + 1) % totalOptions;
-            displayCurrentOption();
-            Serial.print("Selected option index: ");
-            Serial.println(selectedAnswer);
-            delay(200);
-          }
-          if (M5.BtnB.wasPressed()) {
-            if (isMultiSelect) {
-              // Toggle selection for current option
-              selectedOptions[selectedAnswer] = !selectedOptions[selectedAnswer];
-              displayCurrentOption();
-              Serial.print("Toggled option ");
-              Serial.print(selectedAnswer);
-              Serial.print(" to ");
-              Serial.println(selectedOptions[selectedAnswer] ? "selected" : "unselected");
-              delay(200);
-            } else {
-              // For single select, submit immediately
-              sendSingleSelectAnswer();
-              delay(200);
-            }
-          }
-          // Long press button B to submit multi-select answers
-          if (isMultiSelect && M5.BtnB.pressedFor(1000)) {
-            sendMultiSelectAnswers();
-            delay(200);
-          }
-        }
-
-      }
     }
-  }
-
-  }else if (currentPage == 1) {
-    // Quiz page logic
-      if (questionActive && totalOptions > 0) {
-        if (M5.BtnA.wasPressed()) {
-          // Move cursor down, wrap around if needed
-          cursorPosition = (cursorPosition + 1) % (totalOptions + 1); // +1 for Submit option
-          displayQuizPage();
-          delay(200);
-        }
-        
-        if (M5.BtnB.wasPressed()) {
-          // Check if Submit option is selected
-          if (cursorPosition == totalOptions) {
-            // Submit answers
-            if (isMultiSelect) {
-              sendMultiSelectAnswers();
-            } else {
-              // For single select, check if an option is selected
-              bool hasSelection = false;
-              for (int i = 0; i < totalOptions; i++) {
-                if (selectedAnswer == i) {
-                  hasSelection = true;
-                  break;
-                }
-              }
-              
-              if (hasSelection) {
-                sendSingleSelectAnswer();
-              } else {
-                // Display a message if no option is selected
-                M5.Lcd.setCursor(0, M5.Lcd.height() - 36);
-                M5.Lcd.print("Select an option first!");
-                delay(1000);
-                displayQuizPage(); // Redraw the page
-              }
-            }
-          } else {
-            // Toggle selection for current option
-            if (isMultiSelect) {
-              selectedOptions[cursorPosition] = !selectedOptions[cursorPosition];
-            } else {
-              // For single select, just update the selection
-              selectedAnswer = cursorPosition;
-            }
-            displayQuizPage();
-          }
-          delay(200);
-        }
-      }
   }
 }

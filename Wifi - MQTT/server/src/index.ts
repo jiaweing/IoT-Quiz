@@ -12,7 +12,7 @@ import os from "os";
 import { require } from "./cjs-loader.js";
 import { eq, and, sql, desc } from "drizzle-orm";
 import { db } from "@/db/db.js"; // Adjust the path as needed
-import { sessions, questions, options, players, responses, deviceCredentials } from "@/db/schema.js";
+import { sessions, questions, options, players, responses, deviceCredentials, students } from "@/db/schema.js";
 
 // Simple UUID generator
 function generateUUID() {
@@ -31,9 +31,10 @@ interface ClientData {
   ip: string;
   session?: string;
   deviceId: string;
-  name: string;
+  name?: string;
   score: number;
   authenticated: boolean;
+  studentId?: string;
 }
 
 const mq = process.env.MQ === "redis"
@@ -116,6 +117,69 @@ if (cluster.isPrimary) {
     mq,
     persistence,
   });
+
+      // Add this after broker initialization
+broker.authenticate = (client: ExtendedAedesClient,
+  username: Buffer | string | undefined,
+  password: Buffer | string | undefined,
+  callback: (error: Error | null, success: boolean) => void) => {
+  // Allow frontend dashboard to connect without authentication
+  if (client.id === "frontend_dashboard") {
+    console.log("[AUTH] Dashboard client authenticated automatically");
+    client.authenticated = true;
+    return callback(null, true);
+  }
+  
+  // Skip authentication during development if needed
+  // return callback(null, true);
+  
+  if (!username || !password) {
+    console.log(`[AUTH] Missing credentials for client ${client.id}`);
+    return callback(new Error("Username and password required"), false);
+  }
+  
+  const usernameStr = username.toString();
+  const passwordStr = password.toString();
+  
+  console.log(`[AUTH] Authenticating client ${client.id} with username: ${usernameStr}`);
+  
+  // Check credentials against database
+  db.select()
+    .from(deviceCredentials)
+    .where(
+      and(
+        eq(deviceCredentials.macAddress, usernameStr),
+        eq(deviceCredentials.password, passwordStr),
+        eq(deviceCredentials.isActive, true)
+      )
+    )
+    .limit(1)
+    .then((results) => {
+      if (results.length > 0) {
+        console.log(`[AUTH] Client ${client.id} authenticated successfully`);
+        client.authenticated = true;
+        const studentId = results[0].studentId;
+        let cInfo = connectedClients.get(client.id);
+        if (cInfo) {
+          cInfo.studentId = studentId;
+        } else {
+           // If no record exists, create one.
+          cInfo = { id: client.id, ip: "unknown", deviceId: client.id, score: 0, authenticated: false, studentId };
+          connectedClients.set(client.id, cInfo);
+        }
+         console.log("Student ID", cInfo?.studentId);
+        return callback(null, true);
+      } else {
+        console.log(`[AUTH] Invalid credentials for client ${client.id}`);
+        return callback(new Error("Invalid credentials"), false);
+      }
+    })
+    .catch((error) => {
+      console.error(`[AUTH] Database error:`, error);
+      return callback(new Error("Authentication error"), false);
+    });
+};
+
 
 
   interface ExtendedAedesClient extends AedesClient {
@@ -203,57 +267,6 @@ if (cluster.isPrimary) {
       timestamp: broadcastTimestamp,
     };
 
-    // Add this after broker initialization
-broker.authenticate = (client: ExtendedAedesClient,
-  username: Buffer | string | undefined,
-  password: Buffer | string | undefined,
-  callback: (error: Error | null, success: boolean) => void) => {
-  // Allow frontend dashboard to connect without authentication
-  if (client.id === "frontend_dashboard") {
-    console.log("[AUTH] Dashboard client authenticated automatically");
-    client.authenticated = true;
-    return callback(null, true);
-  }
-  
-  // Skip authentication during development if needed
-  // return callback(null, true);
-  
-  if (!username || !password) {
-    console.log(`[AUTH] Missing credentials for client ${client.id}`);
-    return callback(new Error("Username and password required"), false);
-  }
-  
-  const usernameStr = username.toString();
-  const passwordStr = password.toString();
-  
-  console.log(`[AUTH] Authenticating client ${client.id} with username: ${usernameStr}`);
-  
-  // Check credentials against database
-  db.select()
-    .from(deviceCredentials)
-    .where(
-      and(
-        eq(deviceCredentials.macAddress, usernameStr),
-        eq(deviceCredentials.password, passwordStr),
-        eq(deviceCredentials.isActive, true)
-      )
-    )
-    .limit(1)
-    .then((results) => {
-      if (results.length > 0) {
-        console.log(`[AUTH] Client ${client.id} authenticated successfully`);
-        client.authenticated = true;
-        return callback(null, true);
-      } else {
-        console.log(`[AUTH] Invalid credentials for client ${client.id}`);
-        return callback(new Error("Invalid credentials"), false);
-      }
-    })
-    .catch((error) => {
-      console.error(`[AUTH] Database error:`, error);
-      return callback(new Error("Authentication error"), false);
-    });
-};
 
     console.log("Broadcasting question payload:", payload);
   
@@ -309,19 +322,37 @@ broker.authenticate = (client: ExtendedAedesClient,
 
 
   // MQTT: Track client connections
-  broker.on("client", (client: ExtendedAedesClient) => {
+  broker.on("client", async (client: ExtendedAedesClient) => {
     if (client.id === "frontend_dashboard") return;
     let clientIp = "unknown";
     if (client.conn) {
       const socket = client.conn as unknown as net.Socket;
       clientIp = socket.remoteAddress || "unknown";
     }
-    // For simplicity, we use client.id as both deviceId and name.
-    connectedClients.set(client.id, { id: client.id, ip: clientIp, deviceId: client.id, name: client.id, score: 0, authenticated:false });
+    const clientInfo = connectedClients.get(client.id);
+    if (!clientInfo) return;
+    
+    // Query the student's record from the database using studentId.
+    if (clientInfo) {
+      try {
+        const studentRes = await db
+          .select()
+          .from(students)
+          .where(eq(students.id, clientInfo.studentId!))
+          .limit(1);
+        if (studentRes.length > 0) {
+          // Update the in-memory client info with the student's full name.
+          clientInfo.name = studentRes[0].fullName;
+          clientInfo.ip = clientIp;
+        }
+      } catch (err) {
+        console.error("Failed to fetch student name:", err);
+      }
+    }
     publishClientCount();
     broker.publish({
       topic: `system/client/${client.id}/info`,
-      payload: Buffer.from(JSON.stringify({ id: client.id, ip: clientIp, authenticated: false })),
+      payload: Buffer.from(JSON.stringify({ id: client.id, ip: clientIp, authenticated: false, name: clientInfo.name })),
       qos: 1,
     });
     console.log(`[WS] Client connected: ${client.id} from ${clientIp} with authentication status: False`);
@@ -388,7 +419,7 @@ broker.authenticate = (client: ExtendedAedesClient,
             .from(players)
             .where(
               and(
-                eq(players.deviceId, client.id),
+                eq(players.studentId, clientInfo.studentId!),
                 eq(players.sessionId, sessionIdFromPayload)
               )
             )
@@ -397,17 +428,31 @@ broker.authenticate = (client: ExtendedAedesClient,
             await db.insert(players).values({
               id: generateUUID(),
               sessionId: sessionIdFromPayload,
-              deviceId: client.id,
-              name: client.id,
+              studentId: clientInfo.studentId!,
               score: 0,
             });
           }
           clientInfo.authenticated = true
           // Mark client as authenticated for publishing responses.
           client.authenticated = true;
+          if (clientInfo.studentId) {
+            try {
+              const studentRes = await db
+                .select()
+                .from(students)
+                .where(eq(students.id, clientInfo.studentId))
+                .limit(1);
+              if (studentRes.length > 0) {
+                // Update the in-memory client info with the student's full name.
+                clientInfo.name = studentRes[0].fullName;
+              }
+            } catch (err) {
+              console.error("Failed to fetch student name:", err);
+            }
+          }        
           broker.publish({
             topic: `system/client/${client.id}/info`,
-            payload: Buffer.from(JSON.stringify({ id: client.id, ip: clientInfo.ip, authenticated: clientInfo.authenticated })),
+            payload: Buffer.from(JSON.stringify({ id: client.id, ip: clientInfo.ip, authenticated: clientInfo.authenticated, name: clientInfo.name })),
             qos: 1,
           });
         } catch (error) {
@@ -528,14 +573,15 @@ broker.authenticate = (client: ExtendedAedesClient,
               isCorrect,
               pointsAwarded,
             });
+            if (isCorrect) {
+              player.score += pointsAwarded;
+            }
           }
-          if (isCorrect) {
-            player.score += pointsAwarded;
-          }
+          console.log(player.studentId)
           await db
             .update(players)
             .set({ score: player.score })
-            .where(eq(players.deviceId, client.id));
+            .where(eq(players.studentId, player.studentId!));
           
           broker.publish({
             topic: `quiz/player/${client.id}/score`,
@@ -655,13 +701,17 @@ broker.authenticate = (client: ExtendedAedesClient,
             pointsAwarded: exactMatch ? pointsAwarded : 0,
           });
         }
-        await db.update(players).set({ score: player.score }).where(eq(players.deviceId, client.id));
+        await db.update(players).set({ score: player.score }).where(eq(players.studentId, player.studentId!));
         
         broker.publish({
           topic: `quiz/player/${client.id}/score`,
           payload: Buffer.from(JSON.stringify({ id: client.id, score: player.score })),
           qos: 1,
         });
+
+        for (const [optId, clientSet] of Object.entries(currentAnswerDistribution)) {
+          clientSet.delete(client.id);
+        }
         
         // Update distribution: for each submitted option, add client.id.
         for (const optId of submittedOptionIds) {
@@ -695,9 +745,9 @@ broker.authenticate = (client: ExtendedAedesClient,
 // API Endpoint: Register Device - for M5StickC Plus registration
 app.post("/api/register-device", async (c) => {
   try {
-    const { macAddress, deviceName, password } = await c.req.json();
+    const { macAddress, playerName, password } = await c.req.json();
     
-    console.log("[REGISTER] Received registration request:", { macAddress, deviceName });
+    console.log("[REGISTER] Received registration request:", { macAddress, playerName });
     
     if (!macAddress) {
       console.log("[REGISTER] Missing MAC address");
@@ -714,7 +764,6 @@ app.post("/api/register-device", async (c) => {
         throw err;
       });
     
-    const deviceId = generateUUID();
     const securePassword = password || `m5_${Math.random().toString(36).substring(2, 10)}`;
     
     if (existingDevices.length > 0) {
@@ -723,7 +772,6 @@ app.post("/api/register-device", async (c) => {
         .update(deviceCredentials)
         .set({
           password: securePassword,
-          deviceName: deviceName || existingDevices[0].deviceName,
           isActive: true
         })
         .where(eq(deviceCredentials.id, existingDevices[0].id));
@@ -736,14 +784,24 @@ app.post("/api/register-device", async (c) => {
       });
     } else {
       // Create new device
+      const studentId = generateUUID();
+      await db.insert(students).values({
+        id: studentId,
+        fullName: playerName || `Player-${macAddress.slice(-6)}`,
+        createdAt: new Date(),
+      });
+
+      const deviceId = generateUUID();
       await db
         .insert(deviceCredentials)
         .values({
           id: deviceId,
           macAddress: macAddress,
           password: securePassword,
-          deviceName: deviceName || `M5Stick-${macAddress.substring(macAddress.length - 6)}`,
-          isActive: true
+          studentId,
+          isActive: true,
+          createdAt: new Date(),
+          updatedAt: new Date(),
         });
       
       console.log(`[REGISTER] New device registered: ${macAddress}`);
@@ -904,13 +962,25 @@ app.post("/api/quiz/create", async (c) => {
   app.get("/api/quiz/leaderboard", async (c) => {
     const sessionId = c.req.query("sessionId");
     if (!sessionId) return c.text("Session ID required", 400);
+  
     const leaderboard = await db
-      .select()
+      .select({
+        id: players.id,
+        sessionId: players.sessionId,
+        studentId: players.studentId,
+        score: players.score,
+        joinedAt: players.joinedAt,
+        lastActive: players.lastActive,
+        name: students.fullName, // include student's full name
+      })
       .from(players)
+      .innerJoin(students, eq(students.id, players.studentId))
       .where(eq(players.sessionId, sessionId))
-      .orderBy(desc(players.score)); // Sort by score in descending order
+      .orderBy(desc(players.score));
+  
     return c.json(leaderboard);
   });
+  
 
   // API Endpoint: End Quiz – broadcasts an end-of-quiz message.
   app.post("/api/quiz/end", async (c) => {
@@ -941,8 +1011,8 @@ app.post("/api/quiz/create", async (c) => {
     const sessionPlayers = await db.select().from(players).where(eq(players.sessionId, sessionId));
     sessionPlayers.forEach((p) => {
       broker.publish({
-        topic: `quiz/player/${p.deviceId}/score`,
-        payload: Buffer.from(JSON.stringify({ id: p.deviceId, score: 0 })),
+        topic: `quiz/player/${p.id}/score`,
+        payload: Buffer.from(JSON.stringify({ id: p.id, score: 0 })),
         qos: 1,
       });
     });
@@ -970,15 +1040,15 @@ app.post("/api/quiz/create", async (c) => {
   const tlsPort = 8883; // Standard secure MQTT port
 
   const tlsOptions = {
-    key: fs.readFileSync("./certificates//server.key"),
-    cert: fs.readFileSync("./certificates/server.crt"),
-    ca: fs.readFileSync("./certificates/rootCA.pem"),
+    key: fs.readFileSync("./certificates/hotspot/server.key"),
+    cert: fs.readFileSync("./certificates/hotspot/server.crt"),
+    ca: fs.readFileSync("./certificates/hotspot/rootCA.pem"),
   };
 
   const httpsOptions = {
-    key: fs.readFileSync("./certificates/https-key.pem"),
-    cert: fs.readFileSync("./certificates/https.pem"),
-    ca: fs.readFileSync("./certificates/rootCA.pem"),
+    key: fs.readFileSync("./certificates/hotspot/https-key.pem"),
+    cert: fs.readFileSync("./certificates/hotspot/https.pem"),
+    ca: fs.readFileSync("./certificates/hotspot/rootCA.pem"),
   } 
 
   function getLocalIpAddress() {

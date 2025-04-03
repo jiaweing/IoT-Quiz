@@ -71,15 +71,13 @@ export const players = mysqlTable(
   {
     id: varchar("id", { length: 36 }).primaryKey(), // UUID
     sessionId: varchar("session_id", { length: 36 }).notNull(),
-    deviceId: varchar("device_id", { length: 100 }).notNull(), // M5StickC Plus device ID
-    name: varchar("name", { length: 100 }).notNull(),
+    studentId: varchar("student_id", { length: 36 }).notNull(),
     score: int("score").notNull().default(0),
     joinedAt: timestamp("joined_at").defaultNow(),
     lastActive: timestamp("last_active").defaultNow().onUpdateNow(),
   },
   (table) => ({
     sessionIdx: index("session_player_idx").on(table.sessionId),
-    deviceIdx: index("device_idx").on(table.deviceId),
   })
 );
 
@@ -111,7 +109,7 @@ export const deviceCredentials = mysqlTable(
     id: varchar("id", { length: 36 }).primaryKey(), // UUID
     macAddress: varchar("mac_address", { length: 12 }).notNull().unique(), // MAC address without colons
     password: varchar("password", { length: 100 }).notNull(),
-    deviceName: varchar("device_name", { length: 100 }),
+    studentId: varchar("student_id", { length: 36 }).notNull(), // foreign key
     isActive: boolean("is_active").notNull().default(true),
     createdAt: timestamp("created_at").defaultNow(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow(),
@@ -120,3 +118,10 @@ export const deviceCredentials = mysqlTable(
     macAddressIdx: index("mac_address_idx").on(table.macAddress),
   })
 );
+
+// Students Information
+export const students = mysqlTable("students", {
+  id: varchar("id", { length: 36 }).primaryKey(), // UUID
+  fullName: varchar("full_name", { length: 100 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});

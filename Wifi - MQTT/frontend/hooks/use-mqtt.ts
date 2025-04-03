@@ -112,7 +112,7 @@ export function useMqtt() {
               const existing = prev.find((c) => c.id === payload.id);
               if (existing) {
                 return prev.map((c) =>
-                  c.id === payload.id ? { ...c, ip: payload.ip, authenticated: payload.authenticated } : c
+                  c.id === payload.id ? { ...c, ip: payload.ip, authenticated: payload.authenticated, name: payload.name } : c
                 );
               }
               return [...prev, payload];

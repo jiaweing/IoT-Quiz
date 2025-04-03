@@ -1,6 +1,7 @@
 export interface ClientInfo {
   id: string;
   ip: string;
+  name: string;
   session?: string;
   score: number;
   authenticated: boolean;

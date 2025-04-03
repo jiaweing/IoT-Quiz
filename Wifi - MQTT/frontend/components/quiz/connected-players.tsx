@@ -71,7 +71,7 @@ export function ConnectedPlayers({
               <CardContent className="p-4">
                 <div className="flex flex-col gap-2">
                   <div className="flex justify-between items-start">
-                    <h3 className="font-semibold">Player {client.id}</h3>
+                    <h3 className="font-semibold">Player {client.name}</h3>
                     <Badge variant="outline">{client.score} pts</Badge>
                   </div>
                   <p className="text-sm text-muted-foreground">
