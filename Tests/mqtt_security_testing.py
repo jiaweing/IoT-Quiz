@@ -89,3 +89,27 @@ client_publish.on_log = on_log
 print("\n[TEST] Starting unauthorized publish test...")
 client_publish.connect(broker, port)
 client_publish.loop_forever()
+
+# Test 4: Attempt to Join an Active Quiz (should be rejected)
+def on_connect_join(client, userdata, flags, rc):
+    if rc == 0:
+        print("[INFO] Connected to broker for join test.")
+        # Prepare a payload with sessionId "active" to simulate an active quiz
+        payload = '{"sessionId": "m9449vo8-8ft7", "auth": "ABA"}'
+        print("[TEST] Attempting to join an active quiz (expected to fail)...")
+        client.publish("quiz/session/join", payload)
+    else:
+        print("[ERROR] Connection failed with code", rc)
+    time.sleep(3)
+    client.disconnect()
+
+client_join = mqtt.Client(client_id="unauthorized-device-join")
+client_join.username_pw_set("AC0BFB6F9C40", "Pass53142")
+client_join.tls_set(cert_reqs=ssl.CERT_NONE)
+client_join.tls_insecure_set(True)
+client_join.on_connect = on_connect_join
+client_join.on_log = on_log
+
+print("\n[TEST] Starting join active quiz test...")
+client_join.connect(broker, port)
+client_join.loop_forever()
