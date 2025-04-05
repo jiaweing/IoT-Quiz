@@ -461,7 +461,6 @@ if (cluster.isPrimary) {
     const payloadStr = packet.payload.toString();
     // Handle quiz session join
     if (topic === "quiz/session/join") {
-      console.log(activeSession);
       if (activeSession != null) {
         console.log(`[SECURITY] Reject join from ${client.id} – quiz already started.`);
         return;
