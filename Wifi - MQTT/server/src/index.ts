@@ -9,6 +9,8 @@ import type { Client as AedesClient } from "aedes";
 import { createServer } from "aedes-server-factory";
 import net from "net";
 import os from "os";
+import path from "path";
+import { fileURLToPath } from 'url';
 import { require } from "./cjs-loader.js";
 import { eq, and, sql, desc } from "drizzle-orm";
 import { db } from "@/db/db.js"; // Adjust the path as needed
@@ -36,6 +38,32 @@ interface ClientData {
   authenticated: boolean;
   studentId?: string;
 }
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const latencyLogPath = path.join(__dirname, "mqtt_latency_log.csv");
+const deliveryLogPath = path.join(__dirname, "mqtt_delivery_log.csv");
+
+// Initialize latency log
+if (!fs.existsSync(latencyLogPath)) {
+  fs.writeFileSync(latencyLogPath, "timestamp,client_id,question_id,latency_ms\n");
+}
+
+// Initialize delivery log
+if (!fs.existsSync(deliveryLogPath)) {
+  fs.writeFileSync(deliveryLogPath, "timestamp,question_id,expected_responses,received_responses,delivery_rate\n");
+}
+
+// Packet delivery tracking
+const deliveryTracker: {
+  sessionId: string;
+  totalExpected: number;
+  receivedCount: number;
+} = {
+  sessionId: "",
+  totalExpected: 0,
+  receivedCount: 0,
+};
 
 const mq = process.env.MQ === "redis"
   ? require("mqemitter-redis")({
@@ -194,7 +222,8 @@ broker.authenticate = (client: ExtendedAedesClient,
   ): void => {
     const topic = packet.topic;
     if (topic.startsWith("quiz/response") && !client.authenticated) {
-      return callback(new Error("Not authorized"));
+      console.log(`[BLOCKED] Unauthorized publish attempt by ${client.id} on topic ${packet.topic} and ${client.authenticated}`);
+      return callback(new Error("You are Not authorized to publish"));
     }
 
     if (topic === "reset-quiz" && (!packet.client || packet.client.id !== "server_authorized")) {
@@ -278,7 +307,7 @@ broker.authenticate = (client: ExtendedAedesClient,
     });
   
     // Close the question after 30 seconds
-    setTimeout(() => {
+    setTimeout(async () => {
       const closePayload = { questionId: questionData.id, closedAt: Date.now() };
       broker.publish({
         topic: "quiz/question/closed",
@@ -286,6 +315,31 @@ broker.authenticate = (client: ExtendedAedesClient,
         qos: 1,
       });
       console.log(`[QUIZ] Closed question: ${questionData.id}`);
+
+      const playersInSession = await db
+      .select({ count: sql`count(*)` })
+      .from(players)
+      .where(eq(players.sessionId, sessionId));
+      const expectedResponses = Number(playersInSession[0].count);
+
+      const actualResponses = await db
+      .select({ count: sql`count(*)` })
+      .from(responses)
+      .where(and(
+        eq(responses.questionId, questionData.id),
+        eq(responses.sessionId, sessionId)
+      ));
+
+      const receivedCount = Number(actualResponses[0].count);
+      const deliveryRate = expectedResponses === 0 ? 0 : (receivedCount / expectedResponses) * 100;
+
+      const deliveryLogLine = `${new Date().toISOString()},${questionData.id},${expectedResponses},${receivedCount},${deliveryRate.toFixed(1)}%\n`;
+
+      fs.appendFile(deliveryLogPath, deliveryLogLine, (err) => {
+        if (err) console.error("[LOGGING] Failed to write delivery rate log:", err);
+        else console.log(`[LOGGING] Delivery rate for Q${questionData.id}: ${deliveryRate.toFixed(1)}%`);
+      });
+      
     }, 30000);
   
     console.log(`[QUIZ] Broadcasted question: ${questionData.id}`);
@@ -327,6 +381,7 @@ broker.authenticate = (client: ExtendedAedesClient,
     let clientIp = "unknown";
     if (client.conn) {
       const socket = client.conn as unknown as net.Socket;
+      client.authenticated = false;
       clientIp = socket.remoteAddress || "unknown";
     }
     const clientInfo = connectedClients.get(client.id);
@@ -373,6 +428,9 @@ broker.authenticate = (client: ExtendedAedesClient,
 
   // MQTT: Handle incoming messages
   broker.on("publish", async (packet: PublishPacket, client: ExtendedAedesClient | null) => {
+    if (!client) {
+      return;
+    }
     if (!client) return;
     const topic = packet.topic;
     const payloadStr = packet.payload.toString();
@@ -480,6 +538,14 @@ broker.authenticate = (client: ExtendedAedesClient,
       console.log("Received response for question id: ", questionId);
       console.log("Received client timestamp: ", timestamp);
       
+      const receivedAt = Date.now();
+      const latency = receivedAt - Number(timestamp);
+      
+      const latencyLogEntry = `${new Date().toISOString()},${client.id},${questionId},${latency}\n`;
+      fs.appendFile(latencyLogPath, latencyLogEntry, (err) => {
+        if (err) console.error("[LOGGING] Failed to write latency log:", err);
+      });
+
       // For single-select responses, process as before.
       async function processResponse(optionId: string) {
         console.log("Received option id: ", optionId);
@@ -934,6 +1000,16 @@ app.post("/api/quiz/create", async (c) => {
     const sessionResult = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
     const sessionName = sessionResult[0]?.name || "";
 
+    deliveryTracker.sessionId = sessionId;
+    deliveryTracker.receivedCount = 0;
+
+
+    const playersInSession = await db.select().from(players).where(eq(players.sessionId, sessionId));
+
+    deliveryTracker.totalExpected = playersInSession.length;
+
+    console.log(`[DELIVERY] Expecting ${deliveryTracker.totalExpected} responses.`);
+
     broker.publish({
       topic: "quiz/session/start",
       payload: Buffer.from(sessionName),
@@ -1040,15 +1116,15 @@ app.post("/api/quiz/create", async (c) => {
   const tlsPort = 8883; // Standard secure MQTT port
 
   const tlsOptions = {
-    key: fs.readFileSync("./certificates/hotspot/server.key"),
-    cert: fs.readFileSync("./certificates/hotspot/server.crt"),
-    ca: fs.readFileSync("./certificates/hotspot/rootCA.pem"),
+    key: fs.readFileSync("./certificates/server.key"),
+    cert: fs.readFileSync("./certificates/server.crt"),
+    ca: fs.readFileSync("./certificates/rootCA.pem"),
   };
 
   const httpsOptions = {
-    key: fs.readFileSync("./certificates/hotspot/https-key.pem"),
-    cert: fs.readFileSync("./certificates/hotspot/https.pem"),
-    ca: fs.readFileSync("./certificates/hotspot/rootCA.pem"),
+    key: fs.readFileSync("./certificates/https-key.pem"),
+    cert: fs.readFileSync("./certificates/https.pem"),
+    ca: fs.readFileSync("./certificates/rootCA.pem"),
   } 
 
   function getLocalIpAddress() {

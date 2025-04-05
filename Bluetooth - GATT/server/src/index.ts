@@ -3,6 +3,8 @@ import { serve } from "@hono/node-server";
 import { createServer as createHttpsServer } from "node:https";
 import { WebSocketServer } from 'ws';
 import https from 'https';
+import path from "path";
+import { fileURLToPath } from 'url';
 import { Hono } from "hono";
 import { eq, and, sql, desc } from "drizzle-orm";
 import { db } from "@/db/db.js"; // Adjust the path as needed
@@ -22,6 +24,20 @@ const DISTRIBUTION_CHARACTERISTIC_UUID = "abcdef06-1234-5678-1234-56789abcdef0";
 const SESSION_STATUS_CHARACTERISTIC_UUID = "abcdef07-1234-5678-1234-56789abcdef0";
 const TIME_SYNC_CHARACTERISTIC_UUID = "abcdef08-1234-5678-1234-56789abcdef0";
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const latencyLogPath = path.join(__dirname, "bluetooth_latency_log.csv");
+const deliveryLogPath = path.join(__dirname, "bluetooth_delivery_log.csv");
+
+// Initialize latency log
+if (!fs.existsSync(latencyLogPath)) {
+  fs.writeFileSync(latencyLogPath, "timestamp,client_id,question_id,latency_ms\n");
+}
+
+// Initialize delivery log
+if (!fs.existsSync(deliveryLogPath)) {
+  fs.writeFileSync(deliveryLogPath, "timestamp,question_id,expected_responses,received_responses,delivery_rate\n");
+}
 
 // --- Utility: Simple UUID generator ---
 function generateUUID() {
@@ -215,6 +231,14 @@ function handleResponseData(device: ClientDevice, data: Buffer) {
     } else if (payload.action === "response") {
       if (!activeSession) return;
       if (device.session !== activeSession) return;
+      const receivedAt = Date.now();
+      const latency = receivedAt - Number(payload.timestamp);
+      
+      const latencyLogEntry = `${new Date().toISOString()},${device.id},${payload.questionId},${latency}\n`;
+      fs.appendFile(latencyLogPath, latencyLogEntry, (err) => {
+        if (err) console.error("[LOGGING] Failed to write latency log:", err);
+      });
+      
       (async () => {
         try {
           // Check for single-select vs. multi-select payload
@@ -728,10 +752,34 @@ async function broadcastCurrentQuestion(sessionId: string, questionIndex: number
     broadcastWsMessage("question", payload);
   
     // Broadcast question closed data shortly after (as in your original code)
-    setTimeout(() => {
+    setTimeout(async () => {
         const closePayload = { questionId: questionData.id, closedAt: Date.now() };
         updateCharacteristicOnAllClients("questionClosed", closePayload);
         console.log(`[QUIZ] Broadcasted question: ${questionData.id}`);
+
+        const playersInSession = await db
+        .select({ count: sql`count(*)` })
+        .from(players)
+        .where(eq(players.sessionId, sessionId));
+        const expectedResponses = Number(playersInSession[0].count);
+
+        const actualResponses = await db
+        .select({ count: sql`count(*)` })
+        .from(responses)
+        .where(and(
+          eq(responses.questionId, questionData.id),
+          eq(responses.sessionId, sessionId)
+        ));
+
+        const receivedCount = Number(actualResponses[0].count);
+        const deliveryRate = expectedResponses === 0 ? 0 : (receivedCount / expectedResponses) * 100;
+
+        const deliveryLogLine = `${new Date().toISOString()},${questionData.id},${expectedResponses},${receivedCount},${deliveryRate.toFixed(1)}%\n`;
+
+        fs.appendFile(deliveryLogPath, deliveryLogLine, (err) => {
+          if (err) console.error("[LOGGING] Failed to write delivery rate log:", err);
+          else console.log(`[LOGGING] Delivery rate for Q${questionData.id}: ${deliveryRate.toFixed(1)}%`);
+        });
     }, 30000);
     
     console.log(`[QUIZ] Broadcasted question: ${questionData.id}`);

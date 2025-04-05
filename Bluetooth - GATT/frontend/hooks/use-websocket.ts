@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { ClientInfo, DistributionPayload } from "@/types/websocket";
 
+const MAX_RECONNECT_ATTEMPTS = 10;
+const BASE_RECONNECT_DELAY_MS = 1000; // Initial retry delay = 1s
+
 export function useWebsocket() {
   const [clients, setClients] = useState<ClientInfo[]>([]);
   const [isConnected, setIsConnected] = useState(false);
@@ -10,26 +13,23 @@ export function useWebsocket() {
   const [broadcastQuestion, setBroadcastQuestion] = useState<any>(null);
 
   const socketRef = useRef<WebSocket | null>(null);
+  const reconnectAttempts = useRef(0);
+  const reconnectTimeout = useRef<NodeJS.Timeout | null>(null);
 
-  useEffect(() => {
+  const connect = () => {
     const ws = new WebSocket("wss://localhost:8443");
     socketRef.current = ws;
 
-    ws.onerror = (error) => {
-      console.error("WebSocket error:", error, "Ready state:", ws.readyState);
-    };
-
     ws.onopen = () => {
-      console.log("WebSocket connected");
+      console.log("✅ WebSocket connected");
       setIsConnected(true);
+      reconnectAttempts.current = 0;
     };
 
     ws.onmessage = (event) => {
       try {
-        console.log("Client Count:", event.data);
         const data = JSON.parse(event.data);
-       
-        // Expecting messages with a "type" and a "payload" property.
+
         switch (data.type) {
           case "question":
             setAnswerDistribution({ distribution: {}, uniqueRespondents: 0 });
@@ -49,12 +49,9 @@ export function useWebsocket() {
             setSessionStatus(data.payload.status);
             break;
           case "clientCount":
-            console.log("Client Count:", data.payload);
             setTotalClients(parseInt(data.payload, 10));
             break;
           case "clientInfo":
-            
-            // If the client is connected, add/update; if not, remove it.
             if (data.payload.connected === true) {
               setClients((prev) => {
                 const exists = prev.find((c) => c.id === data.payload.id);
@@ -78,16 +75,38 @@ export function useWebsocket() {
     };
 
     ws.onclose = () => {
-      console.log("WebSocket disconnected");
+      console.warn("❌ WebSocket disconnected");
       setIsConnected(false);
+      attemptReconnect();
     };
 
     ws.onerror = (error) => {
       console.error("WebSocket error:", error);
+      ws.close(); // Close and trigger onclose handler
     };
+  };
 
+  const attemptReconnect = () => {
+    if (reconnectAttempts.current >= MAX_RECONNECT_ATTEMPTS) {
+      console.error("🔌 Max WebSocket reconnection attempts reached.");
+      return;
+    }
+
+    const delay = BASE_RECONNECT_DELAY_MS * Math.pow(2, reconnectAttempts.current); // exponential backoff
+    reconnectAttempts.current += 1;
+
+    console.log(`🔁 Attempting to reconnect WebSocket in ${delay / 1000}s...`);
+
+    reconnectTimeout.current = setTimeout(() => {
+      connect();
+    }, delay);
+  };
+
+  useEffect(() => {
+    connect();
     return () => {
-      ws.close();
+      socketRef.current?.close();
+      if (reconnectTimeout.current) clearTimeout(reconnectTimeout.current);
     };
   }, []);
 
