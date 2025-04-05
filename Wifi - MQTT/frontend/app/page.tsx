@@ -131,6 +131,7 @@ export default function QuizHost() {
     }
   };
 
+
   // Handle restarting quiz with same questions
   const handleRestartSame = async () => {
     if (!quizDetails || !sessionId) return;
@@ -200,18 +201,29 @@ export default function QuizHost() {
             />
           )}
 
-          {step === Step.QUESTION_PAGE && quizDetails && (
-            <QuestionPage
-              question={{
-                ...quizDetails.questions[currentQuestionIndex],
-                timestamp: broadcastQuestion?.timestamp,
-              }}
-              currentIndex={currentQuestionIndex}
-              totalQuestions={quizDetails.questions.length}
-              onNextQuestion={handleNextQuestion}
-              totalResponses={totalResponses}
-            />
-          )}
+          {step === Step.QUESTION_PAGE && quizDetails && sessionId && (() => {
+            // Get the current question from the quiz details
+            const currentQuestion = quizDetails.questions[currentQuestionIndex];
+            // Remove the original id property so we can override it
+            const { id: originalId, ...otherProps } = currentQuestion;
+            // Build the question object using broadcastQuestion.id if available
+            const questionWithId = {
+              ...otherProps,
+              id: broadcastQuestion?.id || originalId || `temp-${currentQuestionIndex}`,
+              timestamp: Number(broadcastQuestion?.timestamp || currentQuestion.timestamp),
+            };
+
+            return (
+              <QuestionPage
+                sessionId={sessionId}
+                question={questionWithId}
+                currentIndex={currentQuestionIndex}
+                totalQuestions={quizDetails.questions.length}
+                onNextQuestion={handleNextQuestion}
+                totalResponses={totalResponses}
+              />
+            );
+          })()} 
 
           {step === Step.ANSWER_REVEAL && quizDetails && (
             <AnswerReveal

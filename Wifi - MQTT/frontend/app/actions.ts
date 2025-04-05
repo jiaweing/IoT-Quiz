@@ -75,6 +75,22 @@ export async function broadcastQuestion(
   return response.json();
 }
 
+export async function closeQuestion(sessionId: string, questionId: string) {
+  console.log("Closing question with sessionId:", sessionId, "and questionId:", questionId);
+  const response = await fetch(`${API_BASE}/close-question`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, questionId }),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to close question: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+
+
 export async function getLeaderboard(sessionId: string) {
   const response = await fetch(
     `${API_BASE}/leaderboard?sessionId=${sessionId}`

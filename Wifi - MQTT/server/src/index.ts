@@ -236,20 +236,22 @@ broker.authenticate = (client: ExtendedAedesClient,
   let activeSession: string | null = null; // Active quiz session
   let currentAnswerDistribution: { [key: string]: Set<string> } = { };
   const questionTimestamps = new Map<string, number>();
+  const questionCloseTimeouts = new Map<string, NodeJS.Timeout>();
+
 
 
   async function broadcastCurrentQuestion(sessionId: string, questionIndex: number = 0) {
      // Get total number of questions for the session.
-     const totalQuestionsResult = await db
+    const totalQuestionsResult = await db
      .select({ count: sql`count(*)` })
      .from(questions)
      .where(eq(questions.sessionId, sessionId));
-   const totalQuestions = Number(totalQuestionsResult[0].count);
+    const totalQuestions = Number(totalQuestionsResult[0].count);
  
-   if (questionIndex >= totalQuestions) {
-     console.error("No question found for the current index; quiz is finished.");
-     return;
-   }
+    if (questionIndex >= totalQuestions) {
+      console.error("No question found for the current index; quiz is finished.");
+      return;
+    }
     
     // Retrieve the question for the session, ordered by "order"
     const questionResult = await db
@@ -307,7 +309,7 @@ broker.authenticate = (client: ExtendedAedesClient,
     });
   
     // Close the question after 30 seconds
-    setTimeout(async () => {
+    const timeoutHandle = setTimeout(async () => {
       const closePayload = { questionId: questionData.id, closedAt: Date.now() };
       broker.publish({
         topic: "quiz/question/closed",
@@ -339,8 +341,10 @@ broker.authenticate = (client: ExtendedAedesClient,
         if (err) console.error("[LOGGING] Failed to write delivery rate log:", err);
         else console.log(`[LOGGING] Delivery rate for Q${questionData.id}: ${deliveryRate.toFixed(1)}%`);
       });
-      
+      questionCloseTimeouts.delete(questionData.id);
     }, 30000);
+
+    questionCloseTimeouts.set(questionData.id, timeoutHandle);
   
     console.log(`[QUIZ] Broadcasted question: ${questionData.id}`);
   }
@@ -1056,6 +1060,54 @@ app.post("/api/quiz/create", async (c) => {
   
     return c.json(leaderboard);
   });
+
+  // API Endpoint: Manually close the current question
+app.post("/api/quiz/close-question", async (c) => {
+    const { sessionId, questionId } = await c.req.json();
+    if (!sessionId || !questionId) {
+      return c.text("Session ID and Question ID required", 400);
+    }
+    
+    // If a timeout is pending for this question, cancel it.
+    const timeoutHandle = questionCloseTimeouts.get(questionId);
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+      questionCloseTimeouts.delete(questionId);
+    }
+    
+    // Publish the question closed message immediately.
+    const closePayload = { questionId, closedAt: Date.now() };
+    broker.publish({
+      topic: "quiz/question/closed",
+      payload: Buffer.from(JSON.stringify(closePayload)),
+      qos: 1,
+    });
+    console.log(`[QUIZ] Manually closed question: ${questionId}`);
+
+    const playersInSession = await db
+      .select({ count: sql`count(*)` })
+      .from(players)
+      .where(eq(players.sessionId, sessionId));
+    const expectedResponses = Number(playersInSession[0].count);
+
+    const actualResponses = await db
+      .select({ count: sql`count(*)` })
+      .from(responses)
+      .where(and(
+        eq(responses.questionId, questionId),
+        eq(responses.sessionId, sessionId)
+      ));  
+    const receivedCount = Number(actualResponses[0].count);
+    const deliveryRate = expectedResponses === 0 ? 0 : (receivedCount / expectedResponses) * 100;
+    const deliveryLogLine = `${new Date().toISOString()},${questionId},${expectedResponses},${receivedCount},${deliveryRate.toFixed(1)}%\n`;
+    fs.appendFile(deliveryLogPath, deliveryLogLine, (err) => {
+      if (err) console.error("[LOGGING] Failed to write delivery rate log:", err);
+      else console.log(`[LOGGING] Delivery rate for Q${questionId}: ${deliveryRate.toFixed(1)}%`);
+    });
+
+    return c.json({ message: "Question closed manually", questionId });
+});
+
   
 
   // API Endpoint: End Quiz – broadcasts an end-of-quiz message.

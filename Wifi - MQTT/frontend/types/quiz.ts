@@ -1,6 +1,7 @@
 export interface QuizDetails {
   title: string;
   questions: {
+    id: string;
     questionText: string;
     answers: string[];
     correctAnswerIndex: number;
