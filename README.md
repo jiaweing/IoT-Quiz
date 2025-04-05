@@ -73,7 +73,7 @@ graph TD
     B -->|WSS| D
 ```
 
-### Quiz Session Flow
+### MQTT Quiz Session Flow
 
 ```mermaid
 sequenceDiagram
@@ -82,7 +82,7 @@ sequenceDiagram
     participant D as MySQL Database
     participant M as M5StickC Plus
 
-    %% Device Authentication Phase (Only for MQTT)
+    %% Device Authentication Phase
     M->>S: MQTT CONNECT (MAC Address, Password)
     S->>D: Validate credentials (device_credentials table)
     alt Credentials Valid & Active

@@ -26,3 +26,7 @@ timestamp,question_id,expected_responses,received_responses,delivery_rate
 2025-04-05T12:46:54.129Z,m947jbdv-c4oy,0,0,0.0%
 2025-04-05T12:47:03.281Z,m947jbe5-aqt4,0,0,0.0%
 2025-04-05T12:47:35.316Z,m947kjgt-c92d,0,0,0.0%
+2025-04-05T12:58:39.162Z,m947yeex-dbfo,1,1,100.0%
+2025-04-05T12:58:47.183Z,m947yefh-397z,1,2,200.0%
+2025-04-05T12:59:26.050Z,m947zoww-188u,1,1,100.0%
+2025-04-05T12:59:35.460Z,m947zoxe-e1ir,1,2,200.0%

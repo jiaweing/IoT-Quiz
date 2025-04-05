@@ -1146,7 +1146,8 @@ app.post("/api/quiz/close-question", async (c) => {
       qos: 1,
     });
     console.log(`[QUIZ] End of quiz broadcast for session: ${sessionId}`);
-    return c.json({ message: "Quiz ended", sessionId });
+    activeSession = null;
+    return c.json({ message: "Quiz ended", sessionId })
   });
 
   // API Endpoint: Reset Scores – resets the score for all players in a session to 0.
