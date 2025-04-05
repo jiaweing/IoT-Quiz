@@ -5,6 +5,7 @@ export interface ClientInfo {
   session?: string;
   score: number;
   authenticated: boolean;
+  authorized: boolean
 }
 
 export interface BroadcastQuestion {

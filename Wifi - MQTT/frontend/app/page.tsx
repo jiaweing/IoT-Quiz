@@ -172,12 +172,12 @@ export default function QuizHost() {
   const connectedClients = clients.map((client: ClientInfo) => ({
     ...client,
     score: client.score || 0,
-    authenticated: client.authenticated ?? false, // default value if missing
+    authorized: client.authorized ?? false, // default value if missing
     name: client.name
   }));
 
-  const authenticatedClients = connectedClients.filter(client => client.authenticated);
-  const authenticatedClientsCount = connectedClients.filter(client => client.authenticated).length;
+  const authorizedClients = connectedClients.filter(client => client.authorized);
+  const authorizedClientsCount = connectedClients.filter(client => client.authorized).length;
   return (
     <GradientBackground className="flex flex-col items-center justify-center">
       <main className="w-full max-w-4xl p-6">
@@ -192,9 +192,9 @@ export default function QuizHost() {
           {step === Step.CONNECTED_PLAYERS && quizDetails && (
             <ConnectedPlayers
               expectedTapSequence={quizDetails?.tapSequence || ""}
-              clients={authenticatedClients}
+              clients={authorizedClients}
               isConnected={isConnected}
-              totalClients={authenticatedClientsCount}
+              totalClients={authorizedClientsCount}
               quizTitle={quizDetails.title}
               startSession={startSession}
               allowJoining={handleAllowJoining}

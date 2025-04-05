@@ -18,7 +18,6 @@ import { sessions, questions, options, players, responses, deviceCredentials, st
 
 // Simple UUID generator
 function generateUUID() {
-  // Convert current time to base36 and append a random number in base36.
   return Date.now().toString(36) + '-' + Math.floor(Math.random() * 0xFFFFF).toString(36);
 }
 
@@ -36,9 +35,11 @@ interface ClientData {
   name?: string;
   score: number;
   authenticated: boolean;
+  authorized: boolean;
   studentId?: string;
 }
 
+// Logging Latency and Delivery Rate
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const latencyLogPath = path.join(__dirname, "mqtt_latency_log.csv");
@@ -146,92 +147,112 @@ if (cluster.isPrimary) {
     persistence,
   });
 
+  interface ExtendedAedesClient extends AedesClient {
+    authenticated?: boolean;
+    authorized?: boolean;
+  }
+
       // Add this after broker initialization
-broker.authenticate = (client: ExtendedAedesClient,
+  broker.authenticate = (client: ExtendedAedesClient,
   username: Buffer | string | undefined,
   password: Buffer | string | undefined,
   callback: (error: Error | null, success: boolean) => void) => {
-  // Allow frontend dashboard to connect without authentication
-  if (client.id === "frontend_dashboard") {
-    console.log("[AUTH] Dashboard client authenticated automatically");
-    client.authenticated = true;
-    return callback(null, true);
-  }
+    // Allow frontend dashboard to connect without authentication
+    if (client.id === "frontend_dashboard") {
+      console.log("[AUTH] Dashboard client authenticated automatically");
+      client.authenticated = true;
+      return callback(null, true);
+    }
   
-  // Skip authentication during development if needed
-  // return callback(null, true);
+    // Skip authentication during development if needed
+    // return callback(null, true);
+    
+    if (!username || !password) {
+      console.log(`[AUTH] Missing credentials for client ${client.id}`);
+      return callback(new Error("Username and password required"), false);
+    }
   
-  if (!username || !password) {
-    console.log(`[AUTH] Missing credentials for client ${client.id}`);
-    return callback(new Error("Username and password required"), false);
-  }
-  
-  const usernameStr = username.toString();
-  const passwordStr = password.toString();
-  
-  console.log(`[AUTH] Authenticating client ${client.id} with username: ${usernameStr}`);
-  
-  // Check credentials against database
-  db.select()
-    .from(deviceCredentials)
-    .where(
-      and(
-        eq(deviceCredentials.macAddress, usernameStr),
-        eq(deviceCredentials.password, passwordStr),
-        eq(deviceCredentials.isActive, true)
+    const usernameStr = username.toString();
+    const passwordStr = password.toString();
+    
+    console.log(`[AUTH] Authenticating client ${client.id} with username: ${usernameStr}`);
+    
+    // Check credentials against database
+    db.select()
+      .from(deviceCredentials)
+      .where(
+        and(
+          eq(deviceCredentials.macAddress, usernameStr),
+          eq(deviceCredentials.password, passwordStr),
+          eq(deviceCredentials.isActive, true)
+        )
       )
-    )
-    .limit(1)
-    .then((results) => {
-      if (results.length > 0) {
-        console.log(`[AUTH] Client ${client.id} authenticated successfully`);
-        client.authenticated = true;
-        const studentId = results[0].studentId;
-        let cInfo = connectedClients.get(client.id);
-        if (cInfo) {
-          cInfo.studentId = studentId;
+      .limit(1)
+      .then((results) => {
+        if (results.length > 0) {
+          console.log(`[AUTH] Client ${client.id} authenticated successfully`);
+          client.authenticated = true;
+          const studentId = results[0].studentId;
+          let cInfo = connectedClients.get(client.id);
+          if (cInfo) {
+            cInfo.studentId = studentId;
+          } else {
+            // If no record exists, create one.
+            cInfo = { id: client.id, ip: "unknown", deviceId: client.id, score: 0, authenticated: true, authorized: false, studentId };
+            connectedClients.set(client.id, cInfo);
+          }
+          console.log("Student ID", cInfo?.studentId);
+          return callback(null, true);
         } else {
-           // If no record exists, create one.
-          cInfo = { id: client.id, ip: "unknown", deviceId: client.id, score: 0, authenticated: false, studentId };
-          connectedClients.set(client.id, cInfo);
+          console.log(`[AUTH] Invalid credentials for client ${client.id}`);
+          return callback(new Error("Invalid credentials"), false);
         }
-         console.log("Student ID", cInfo?.studentId);
-        return callback(null, true);
-      } else {
-        console.log(`[AUTH] Invalid credentials for client ${client.id}`);
-        return callback(new Error("Invalid credentials"), false);
-      }
-    })
-    .catch((error) => {
-      console.error(`[AUTH] Database error:`, error);
-      return callback(new Error("Authentication error"), false);
-    });
-};
+      })
+      .catch((error) => {
+        console.error(`[AUTH] Database error:`, error);
+        return callback(new Error("Authentication error"), false);
+      });
+  };
 
-
-
-  interface ExtendedAedesClient extends AedesClient {
-    authenticated?: boolean;
-  }
-
-  // Authorize publish on "quiz/response" only for authenticated clients.
+  // Authorize publish on "quiz/response" only for authorized clients.
   broker.authorizePublish = (
     client: ExtendedAedesClient,
     packet: PublishPacket,
     callback: (error: Error | null) => void
   ): void => {
     const topic = packet.topic;
-    if (topic.startsWith("quiz/response") && !client.authenticated) {
-      console.log(`[BLOCKED] Unauthorized publish attempt by ${client.id} on topic ${packet.topic} and ${client.authenticated}`);
-      return callback(new Error("You are Not authorized to publish"));
+    if (topic.startsWith("quiz/response") && !client.authorized) {
+      console.log(`[BLOCKED] Unauthorized publish attempt by ${client.id} on topic ${packet.topic}`);
+      return callback(new Error("Not authorized to publish"));
+    }
+    
+    if (topic === "reset-quiz" && (!packet.client || packet.client.id !== "server_authorized")) {
+      return callback(new Error("Not authorized to publish to reset-quiz"));
     }
 
-    if (topic === "reset-quiz" && (!packet.client || packet.client.id !== "server_authorized")) {
+    if (topic.endsWith("score") && (!packet.client || packet.client.id !== "server_authorized")) {
       return callback(new Error("Not authorized to publish to reset-quiz"));
     }
   
     callback(null);
   };
+
+  broker.authorizeSubscribe = (
+    client: ExtendedAedesClient,
+    subscription: { topic: string },
+    callback: (error: Error | null, subscription?: { topic: string; qos: number }) => void
+  ): void => {
+    const topic = subscription.topic;
+    
+    if (topic.startsWith("quiz/response") && !client.authorized) {
+      console.log(`[BLOCKED] Unauthorized subscribe attempt by ${client.id} on topic ${subscription.topic}`);
+      return callback(new Error("Not authorized to subscribe to this topic"));
+    }
+    // Otherwise, allow the subscription with default qos.
+    callback(null, { topic, qos: 1 });
+  };
+
+
   const connectedClients = new Map<string, ClientData>();
   let activeSession: string | null = null; // Active quiz session
   let currentAnswerDistribution: { [key: string]: Set<string> } = { };
@@ -385,7 +406,7 @@ broker.authenticate = (client: ExtendedAedesClient,
     let clientIp = "unknown";
     if (client.conn) {
       const socket = client.conn as unknown as net.Socket;
-      client.authenticated = false;
+      client.authorized = false;
       clientIp = socket.remoteAddress || "unknown";
     }
     const clientInfo = connectedClients.get(client.id);
@@ -411,10 +432,10 @@ broker.authenticate = (client: ExtendedAedesClient,
     publishClientCount();
     broker.publish({
       topic: `system/client/${client.id}/info`,
-      payload: Buffer.from(JSON.stringify({ id: client.id, ip: clientIp, authenticated: false, name: clientInfo.name })),
+      payload: Buffer.from(JSON.stringify({ id: client.id, ip: clientIp, authenticated: true, authorized: false, name: clientInfo.name })),
       qos: 1,
     });
-    console.log(`[WS] Client connected: ${client.id} from ${clientIp} with authentication status: False`);
+    console.log(`[WS] Client connected: ${client.id} from ${clientIp}`);
   });
 
   broker.on("clientDisconnect", (client: AedesClient) => {
@@ -494,9 +515,9 @@ broker.authenticate = (client: ExtendedAedesClient,
               score: 0,
             });
           }
-          clientInfo.authenticated = true
-          // Mark client as authenticated for publishing responses.
-          client.authenticated = true;
+          clientInfo.authorized = true
+          // Mark client as authorized for publishing responses.
+          client.authorized = true;
           if (clientInfo.studentId) {
             try {
               const studentRes = await db
@@ -514,7 +535,7 @@ broker.authenticate = (client: ExtendedAedesClient,
           }        
           broker.publish({
             topic: `system/client/${client.id}/info`,
-            payload: Buffer.from(JSON.stringify({ id: client.id, ip: clientInfo.ip, authenticated: clientInfo.authenticated, name: clientInfo.name })),
+            payload: Buffer.from(JSON.stringify({ id: client.id, ip: clientInfo.ip, authenticated: clientInfo.authenticated, authorized: clientInfo.authorized, name: clientInfo.name })),
             qos: 1,
           });
         } catch (error) {
@@ -657,6 +678,7 @@ broker.authenticate = (client: ExtendedAedesClient,
             topic: `quiz/player/${client.id}/score`,
             payload: Buffer.from(JSON.stringify({ id: client.id, score: player.score })),
             qos: 1,
+            client: { id: "server_authorized" }
           });
           
           // Update distribution for single-select.
@@ -777,6 +799,7 @@ broker.authenticate = (client: ExtendedAedesClient,
           topic: `quiz/player/${client.id}/score`,
           payload: Buffer.from(JSON.stringify({ id: client.id, score: player.score })),
           qos: 1,
+          client: { id: "server_authorized" }
         });
 
         for (const [optId, clientSet] of Object.entries(currentAnswerDistribution)) {
@@ -1142,6 +1165,7 @@ app.post("/api/quiz/close-question", async (c) => {
         topic: `quiz/player/${p.id}/score`,
         payload: Buffer.from(JSON.stringify({ id: p.id, score: 0 })),
         qos: 1,
+        client: { id: "server_authorized" }
       });
     });
 
