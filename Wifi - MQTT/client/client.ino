@@ -29,12 +29,12 @@ String mqtt_client_id = "";
 
 // Quiz state variables
 String currentSessionId = "";
-String expectedTapSequence = "";  // Expected tap sequence from teacher.
-String joinSequenceInput = "";    // The sequence the student has tapped.
+String expectedTapSequence = "";  
+String joinSequenceInput = "";    
 unsigned long lastBroadcastTime = 0;
 unsigned long long timeOffset = 0;
-bool questionActive = false;      // Indicates if a question is open.
-bool joinedSession = false;       // Indicates if this device has joined.
+bool questionActive = false;      
+bool joinedSession = false;       
 
 // Questions/ Answers Variables
 String optionIds[4];

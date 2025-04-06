@@ -16,17 +16,19 @@ import { eq, and, sql, desc } from "drizzle-orm";
 import { db } from "@/db/db.js"; // Adjust the path as needed
 import { sessions, questions, options, players, responses, deviceCredentials, students } from "@/db/schema.js";
 
-// Simple UUID generator
+// Utility function to generate a unique identifier
 function generateUUID() {
   return Date.now().toString(36) + '-' + Math.floor(Math.random() * 0xFFFFF).toString(36);
 }
 
+// Define interface for publishing packets over MQTT
 interface PublishPacket {
   topic: string;
   payload: Buffer;
   client?: { id: string };
 }
 
+// Define interface for client data stored in memory
 interface ClientData {
   id: string;
   ip: string;
@@ -39,9 +41,22 @@ interface ClientData {
   studentId?: string;
 }
 
-// Logging Latency and Delivery Rate
+// Structure for tracking delivery metrics
+const deliveryTracker: {
+  sessionId: string;
+  totalExpected: number;
+  receivedCount: number;
+} = {
+  sessionId: "",
+  totalExpected: 0,
+  receivedCount: 0,
+};
+
+// Get file path info for logging
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Define log file paths
 const latencyLogPath = path.join(__dirname, "mqtt_latency_log.csv");
 const deliveryLogPath = path.join(__dirname, "mqtt_delivery_log.csv");
 
@@ -55,17 +70,7 @@ if (!fs.existsSync(deliveryLogPath)) {
   fs.writeFileSync(deliveryLogPath, "timestamp,question_id,expected_responses,received_responses,delivery_rate\n");
 }
 
-// Packet delivery tracking
-const deliveryTracker: {
-  sessionId: string;
-  totalExpected: number;
-  receivedCount: number;
-} = {
-  sessionId: "",
-  totalExpected: 0,
-  receivedCount: 0,
-};
-
+// Initialize MQTT emitter based on environment variable (Redis or MongoDB)
 const mq = process.env.MQ === "redis"
   ? require("mqemitter-redis")({
       port: process.env.REDIS_PORT,
@@ -74,6 +79,7 @@ const mq = process.env.MQ === "redis"
       url: process.env.MONGO_URL,
     });
 
+// Initialize persistence layer for MQTT broker based on environment variable
 const persistence = process.env.PERSISTENCE === "redis"
   ? require("aedes-persistence-redis")({
       port: process.env.REDIS_PORT,
@@ -82,7 +88,9 @@ const persistence = process.env.PERSISTENCE === "redis"
       url: process.env.MONGO_URL,
     });
 
-// ----- CLUSTERING SETUP -----
+// -------------------- CLUSTERING SETUP --------------------
+
+// If this process is the primary (master), fork worker processes
 if (cluster.isPrimary) {
   const numCPUs = os.cpus().length;
   console.log(`Master ${process.pid} is running with ${numCPUs} CPUs`);
@@ -92,14 +100,15 @@ if (cluster.isPrimary) {
     cluster.fork();
   }
   
+  // Restart a worker if it dies
   cluster.on("exit", (worker, code, signal) => {
     console.log(`Worker ${worker.process.pid} died. Restarting...`);
     cluster.fork();
   });
   
 } else {
-  // ----- WORKER PROCESS: Initialize MQTT Broker and HTTP Server -----
-  
+  // -------------------- WORKER PROCESS: Initialize MQTT Broker & HTTP Server --------------------
+
   // Initialize Hono app for HTTP endpoints.
   const app = new Hono();
 
@@ -121,25 +130,7 @@ if (cluster.isPrimary) {
     });
   });
 
-  // CORS Middleware
-  app.use("*", async (c, next) => {
-    await next();
-    c.header("Access-Control-Allow-Origin", "*");
-    c.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    c.header("Access-Control-Allow-Headers", "Content-Type");
-  });
-  app.options("*", (c) => {
-    return new Response(null, {
-      status: 204,
-      headers: new Headers({
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      }),
-    });
-  });
-
-  // MQTT Broker & In-Memory Tracking
+  // -------------------- MQTT Broker Initialization --------------------
   const Aedes = require("aedes");
   const broker = Aedes({
     id: "BROKER_" + cluster.worker!.id,
@@ -147,12 +138,21 @@ if (cluster.isPrimary) {
     persistence,
   });
 
+  // Extend the default client interface with additional flags
   interface ExtendedAedesClient extends AedesClient {
     authenticated?: boolean;
     authorized?: boolean;
   }
 
-      // Add this after broker initialization
+  // Global variables for In-Memory Client Tracking
+  const connectedClients = new Map<string, ClientData>();
+  let activeSession: string | null = null; // Active quiz session
+  let currentAnswerDistribution: { [key: string]: Set<string> } = { };
+  const questionTimestamps = new Map<string, number>();
+  const questionCloseTimeouts = new Map<string, NodeJS.Timeout>();
+
+  // -------------------- MQTT Authentication --------------------
+  // Authenticate incoming clients against the database
   broker.authenticate = (client: ExtendedAedesClient,
   username: Buffer | string | undefined,
   password: Buffer | string | undefined,
@@ -163,10 +163,8 @@ if (cluster.isPrimary) {
       client.authenticated = true;
       return callback(null, true);
     }
-  
-    // Skip authentication during development if needed
-    // return callback(null, true);
-    
+
+    // Require credentials for other clients
     if (!username || !password) {
       console.log(`[AUTH] Missing credentials for client ${client.id}`);
       return callback(new Error("Username and password required"), false);
@@ -214,18 +212,21 @@ if (cluster.isPrimary) {
       });
   };
 
-  // Authorize publish on "quiz/response" only for authorized clients.
+  // -------------------- MQTT Authorization --------------------
+  // Authorize publishing on certain topics (e.g., quiz responses)
   broker.authorizePublish = (
     client: ExtendedAedesClient,
     packet: PublishPacket,
     callback: (error: Error | null) => void
   ): void => {
     const topic = packet.topic;
+    // Only allow publishing quiz responses if client is authorized
     if (topic.startsWith("quiz/response") && !client.authorized) {
       console.log(`[BLOCKED] Unauthorized publish attempt by ${client.id} on topic ${packet.topic}`);
       return callback(new Error("Not authorized to publish"));
     }
     
+    // Only server can publish to topics: reset-quiz and score updates
     if (topic === "reset-quiz" && (!packet.client || packet.client.id !== "server_authorized")) {
       return callback(new Error("Not authorized to publish to reset-quiz"));
     }
@@ -237,6 +238,7 @@ if (cluster.isPrimary) {
     callback(null);
   };
 
+  // Authorize subscriptions similarly
   broker.authorizeSubscribe = (
     client: ExtendedAedesClient,
     subscription: { topic: string },
@@ -252,15 +254,7 @@ if (cluster.isPrimary) {
     callback(null, { topic, qos: 1 });
   };
 
-
-  const connectedClients = new Map<string, ClientData>();
-  let activeSession: string | null = null; // Active quiz session
-  let currentAnswerDistribution: { [key: string]: Set<string> } = { };
-  const questionTimestamps = new Map<string, number>();
-  const questionCloseTimeouts = new Map<string, NodeJS.Timeout>();
-
-
-
+  // -------------------- Broadcast Current Question --------------------
   async function broadcastCurrentQuestion(sessionId: string, questionIndex: number = 0) {
      // Get total number of questions for the session.
     const totalQuestionsResult = await db
@@ -296,9 +290,7 @@ if (cluster.isPrimary) {
       .from(options)
       .where(eq(options.questionId, questionData.id))
       .orderBy(options.order);
-  
-    // Reset answer distribution for new question (keys "1" to "4")
-    // currentAnswerDistribution = { "1": 0, "2": 0, "3": 0, "4": 0 };
+
     currentAnswerDistribution = {};
     optionsResult.forEach((opt: any) => {
       currentAnswerDistribution[opt.id] = new Set();
@@ -313,12 +305,11 @@ if (cluster.isPrimary) {
     const payload = {
       id: questionData.id,
       text: questionData.text,
-      type: questionData.type, // Include the question type (e.g., "multi_select" or "single_select")
+      type: questionData.type,
       options: optionsResult.map(opt => ({ id: opt.id, text: opt.text })),
       correctOptionIds,
       timestamp: broadcastTimestamp,
     };
-
 
     console.log("Broadcasting question payload:", payload);
   
@@ -370,7 +361,7 @@ if (cluster.isPrimary) {
     console.log(`[QUIZ] Broadcasted question: ${questionData.id}`);
   }
   
-  // Publish the connected clients count to topic "system/client_count"
+   // -------------------- Publish Connected Client Count --------------------
   function publishClientCount() {
     setTimeout(() => {
       const count = Array.from(connectedClients.keys()).filter(
@@ -384,7 +375,7 @@ if (cluster.isPrimary) {
     }, 500);
   }
 
-  // Function to publish server time for synchronization
+  // -------------------- Publish Server Time for Synchronization --------------------
   function publishTimeSync() {
     setInterval(() => {
         const serverTime = Date.now(); // Get server time in milliseconds
@@ -393,14 +384,15 @@ if (cluster.isPrimary) {
             payload: Buffer.from(JSON.stringify({ serverTime })),
             qos: 1,
         });
-        // console.log(`[SYNC] Server time published: ${serverTime}`);
     }, 1000); // Broadcast every 5 seconds
   }
 
   publishTimeSync();
 
 
-  // MQTT: Track client connections
+  // -------------------- MQTT Client Connection Tracking --------------------
+
+  // When a new client connects, update in-memory state and publish client info
   broker.on("client", async (client: ExtendedAedesClient) => {
     if (client.id === "frontend_dashboard") return;
     let clientIp = "unknown";
@@ -451,7 +443,7 @@ if (cluster.isPrimary) {
     }
   });
 
-  // MQTT: Handle incoming messages
+  // -------------------- MQTT Message Handling --------------------
   broker.on("publish", async (packet: PublishPacket, client: ExtendedAedesClient | null) => {
     if (!client) {
       return;
@@ -459,7 +451,8 @@ if (cluster.isPrimary) {
     if (!client) return;
     const topic = packet.topic;
     const payloadStr = packet.payload.toString();
-    // Handle quiz session join
+
+    // -------------------- Handle Quiz Session Join --------------------
     if (topic === "quiz/session/join") {
       if (activeSession != null) {
         console.log(`[SECURITY] Reject join from ${client.id} – quiz already started.`);
@@ -545,8 +538,7 @@ if (cluster.isPrimary) {
       return;
     }
 
-
-    // Handle quiz responses.
+    // -------------------- Handle Quiz Responses --------------------
     if (topic === "quiz/response") {
       if (!activeSession) return;
       const player = connectedClients.get(client.id);
@@ -571,7 +563,7 @@ if (cluster.isPrimary) {
         if (err) console.error("[LOGGING] Failed to write latency log:", err);
       });
 
-      // For single-select responses, process as before.
+      // Process single-select responses
       async function processResponse(optionId: string) {
         console.log("Received option id: ", optionId);
         try {
@@ -707,11 +699,12 @@ if (cluster.isPrimary) {
         }
       }
       
+      // Process single-select responses
       if (answerObj.optionId) {
-        // Single-select: process one optionId.
         processResponse(answerObj.optionId);
-      } else if (answerObj.optionIds) {
-        // Multi-select: process the answer as one submission.
+      } 
+      // Process multi-select responses
+      else if (answerObj.optionIds) {
         const submittedOptionIds: string[] = answerObj.optionIds;
         
         // Retrieve the question record.
@@ -842,151 +835,143 @@ if (cluster.isPrimary) {
   });
 
 
-  // Add these API endpoints to your server code where the other endpoints are defined
+  // -------------------- API Endpoints --------------------
 
-// API Endpoint: Register Device - for M5StickC Plus registration
-app.post("/api/register-device", async (c) => {
-  try {
-    const { macAddress, playerName, password } = await c.req.json();
-    
-    console.log("[REGISTER] Received registration request:", { macAddress, playerName });
-    
-    if (!macAddress) {
-      console.log("[REGISTER] Missing MAC address");
-      return c.json({ success: false, error: "MAC address is required" }, 400);
-    }
-    console.log("Attempting to connect to database...");
-    // Check if device already exists
-    const existingDevices = await db.select()
-      .from(deviceCredentials)
-      .where(eq(deviceCredentials.macAddress, macAddress))
-      .limit(1)
-      .catch(err => {
-        console.error("Database SELECT error:", err);
-        throw err;
-      });
-    
-    const securePassword = password || `m5_${Math.random().toString(36).substring(2, 10)}`;
-    
-    if (existingDevices.length > 0) {
-      // Update existing device
-      await db
-        .update(deviceCredentials)
-        .set({
-          password: securePassword,
-          isActive: true
-        })
-        .where(eq(deviceCredentials.id, existingDevices[0].id));
+  // API Endpoint: Register Device - for M5StickC Plus registration
+  app.post("/api/register-device", async (c) => {
+    try {
+      const { macAddress, playerName, password } = await c.req.json();
       
-      console.log(`[REGISTER] Updated device: ${macAddress}`);
-      return c.json({
-        success: true,
-        message: "Device updated successfully",
-        password: securePassword
-      });
-    } else {
-      // Create new device
-      const studentId = generateUUID();
-      await db.insert(students).values({
-        id: studentId,
-        fullName: playerName || `Player-${macAddress.slice(-6)}`,
-        createdAt: new Date(),
-      });
-
-      const deviceId = generateUUID();
-      await db
-        .insert(deviceCredentials)
-        .values({
-          id: deviceId,
-          macAddress: macAddress,
-          password: securePassword,
-          studentId,
-          isActive: true,
-          createdAt: new Date(),
-          updatedAt: new Date(),
+      console.log("[REGISTER] Received registration request:", { macAddress, playerName });
+      
+      if (!macAddress) {
+        console.log("[REGISTER] Missing MAC address");
+        return c.json({ success: false, error: "MAC address is required" }, 400);
+      }
+      console.log("Attempting to connect to database...");
+      // Check if device already exists
+      const existingDevices = await db.select()
+        .from(deviceCredentials)
+        .where(eq(deviceCredentials.macAddress, macAddress))
+        .limit(1)
+        .catch(err => {
+          console.error("Database SELECT error:", err);
+          throw err;
         });
       
-      console.log(`[REGISTER] New device registered: ${macAddress}`);
-      return c.json({
-        success: true,
-        message: "Device registered successfully",
-        password: securePassword
-      });
+      const securePassword = password || `m5_${Math.random().toString(36).substring(2, 10)}`;
+      
+      if (existingDevices.length > 0) {
+        // Update existing device
+        await db
+          .update(deviceCredentials)
+          .set({
+            password: securePassword,
+            isActive: true
+          })
+          .where(eq(deviceCredentials.id, existingDevices[0].id));
+        
+        console.log(`[REGISTER] Updated device: ${macAddress}`);
+        return c.json({
+          success: true,
+          message: "Device updated successfully",
+          password: securePassword
+        });
+      } else {
+        // Create new device
+        const studentId = generateUUID();
+        await db.insert(students).values({
+          id: studentId,
+          fullName: playerName || `Player-${macAddress.slice(-6)}`,
+          createdAt: new Date(),
+        });
+
+        const deviceId = generateUUID();
+        await db
+          .insert(deviceCredentials)
+          .values({
+            id: deviceId,
+            macAddress: macAddress,
+            password: securePassword,
+            studentId,
+            isActive: true,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+        
+        console.log(`[REGISTER] New device registered: ${macAddress}`);
+        return c.json({
+          success: true,
+          message: "Device registered successfully",
+          password: securePassword
+        });
+      }
+    } catch (error) {
+      console.error("[REGISTER] Error:", error);
+      return c.json({ 
+        success: false, 
+        error: "Failed to register device" 
+      }, 500);
     }
-  } catch (error) {
-    console.error("[REGISTER] Error:", error);
-    return c.json({ 
-      success: false, 
-      error: "Failed to register device" 
-    }, 500);
-  }
-});
-
-// API Endpoint: Test endpoint for basic connectivity testing
-app.get("/api/test", (c) => {
-  return c.json({ status: "ok", message: "Server is running" });
-});
-
-
-  // API Endpoint: Create Quiz – creates a session, questions, and options
-app.post("/api/quiz/create", async (c) => {
-  const { sessionName, quizQuestions, tapSequence } = await c.req.json();
-  if (!sessionName || !quizQuestions || !tapSequence) return c.text("Invalid payload", 400);
-  
-  
-
-  const sessionId = generateUUID();
-  // Insert a new session with default config
-  await db.insert(sessions).values({
-    id: sessionId,
-    name: sessionName,
-    status: "pending",
-    tapSequence,
   });
 
-  // Insert questions and their options
-  for (let i = 0; i < quizQuestions.length; i++) {
-    const q = quizQuestions[i];
-    const questionId = generateUUID();
-    await db.insert(questions).values({
-      id: questionId,
-      sessionId,
-      text: q.questionText,
-      type: q.type, 
-      order: i + 1,
+  // API Endpoint: Create Quiz – creates a session, questions, and options
+  app.post("/api/quiz/create", async (c) => {
+    const { sessionName, quizQuestions, tapSequence } = await c.req.json();
+    if (!sessionName || !quizQuestions || !tapSequence) return c.text("Invalid payload", 400);
+    
+    const sessionId = generateUUID();
+    // Insert a new session with default config
+    await db.insert(sessions).values({
+      id: sessionId,
+      name: sessionName,
+      status: "pending",
+      tapSequence,
     });
 
-    // Handle correct answers based on question type
-    if (q.type === "multi_select" && q.correctAnswers) {
-      // For multi-select questions, use the correctAnswers array
-      for (let j = 0; j < q.answers.length; j++) {
-        const optionText = q.answers[j];
-        await db.insert(options).values({
-          id: generateUUID(),
-          questionId,
-          text: optionText,
-          isCorrect: q.correctAnswers[j],
-          order: j + 1,
-        });
-      }
-    } else {
-      // For single-select questions, use the correctAnswerIndex
-      for (let j = 0; j < q.answers.length; j++) {
-        const optionText = q.answers[j];
-        await db.insert(options).values({
-          id: generateUUID(),
-          questionId,
-          text: optionText,
-          isCorrect: j === q.correctAnswerIndex,
-          order: j + 1,
-        });
+    // Insert questions and their options
+    for (let i = 0; i < quizQuestions.length; i++) {
+      const q = quizQuestions[i];
+      const questionId = generateUUID();
+      await db.insert(questions).values({
+        id: questionId,
+        sessionId,
+        text: q.questionText,
+        type: q.type, 
+        order: i + 1,
+      });
+
+      // Handle correct answers based on question type
+      if (q.type === "multi_select" && q.correctAnswers) {
+        // For multi-select questions, use the correctAnswers array
+        for (let j = 0; j < q.answers.length; j++) {
+          const optionText = q.answers[j];
+          await db.insert(options).values({
+            id: generateUUID(),
+            questionId,
+            text: optionText,
+            isCorrect: q.correctAnswers[j],
+            order: j + 1,
+          });
+        }
+      } else {
+        // For single-select questions, use the correctAnswerIndex
+        for (let j = 0; j < q.answers.length; j++) {
+          const optionText = q.answers[j];
+          await db.insert(options).values({
+            id: generateUUID(),
+            questionId,
+            text: optionText,
+            isCorrect: j === q.correctAnswerIndex,
+            order: j + 1,
+          });
+        }
       }
     }
-  }
-  
-  console.log(`[QUIZ] Quiz created: ${sessionName} with sessionId: ${sessionId}`);
-  return c.json({ message: "Quiz created", sessionId });
-});
+    
+    console.log(`[QUIZ] Quiz created: ${sessionName} with sessionId: ${sessionId}`);
+    return c.json({ message: "Quiz created", sessionId });
+  });
 
 
   // API Endpoint: Broadcast Auth Code – publishes the session's tap sequence to M5Stick devices.
@@ -1094,53 +1079,51 @@ app.post("/api/quiz/create", async (c) => {
   });
 
   // API Endpoint: Manually close the current question
-app.post("/api/quiz/close-question", async (c) => {
-    const { sessionId, questionId } = await c.req.json();
-    if (!sessionId || !questionId) {
-      return c.text("Session ID and Question ID required", 400);
-    }
-    
-    // If a timeout is pending for this question, cancel it.
-    const timeoutHandle = questionCloseTimeouts.get(questionId);
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-      questionCloseTimeouts.delete(questionId);
-    }
-    
-    // Publish the question closed message immediately.
-    const closePayload = { questionId, closedAt: Date.now() };
-    broker.publish({
-      topic: "quiz/question/closed",
-      payload: Buffer.from(JSON.stringify(closePayload)),
-      qos: 1,
-    });
-    console.log(`[QUIZ] Manually closed question: ${questionId}`);
+  app.post("/api/quiz/close-question", async (c) => {
+      const { sessionId, questionId } = await c.req.json();
+      if (!sessionId || !questionId) {
+        return c.text("Session ID and Question ID required", 400);
+      }
+      
+      // If a timeout is pending for this question, cancel it.
+      const timeoutHandle = questionCloseTimeouts.get(questionId);
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+        questionCloseTimeouts.delete(questionId);
+      }
+      
+      // Publish the question closed message immediately.
+      const closePayload = { questionId, closedAt: Date.now() };
+      broker.publish({
+        topic: "quiz/question/closed",
+        payload: Buffer.from(JSON.stringify(closePayload)),
+        qos: 1,
+      });
+      console.log(`[QUIZ] Manually closed question: ${questionId}`);
 
-    const playersInSession = await db
-      .select({ count: sql`count(*)` })
-      .from(players)
-      .where(eq(players.sessionId, sessionId));
-    const expectedResponses = Number(playersInSession[0].count);
+      const playersInSession = await db
+        .select({ count: sql`count(*)` })
+        .from(players)
+        .where(eq(players.sessionId, sessionId));
+      const expectedResponses = Number(playersInSession[0].count);
 
-    const actualResponses = await db
-      .select({ count: sql`count(*)` })
-      .from(responses)
-      .where(and(
-        eq(responses.questionId, questionId),
-        eq(responses.sessionId, sessionId)
-      ));  
-    const receivedCount = Number(actualResponses[0].count);
-    const deliveryRate = expectedResponses === 0 ? 0 : (receivedCount / expectedResponses) * 100;
-    const deliveryLogLine = `${new Date().toISOString()},${questionId},${expectedResponses},${receivedCount},${deliveryRate.toFixed(1)}%\n`;
-    fs.appendFile(deliveryLogPath, deliveryLogLine, (err) => {
-      if (err) console.error("[LOGGING] Failed to write delivery rate log:", err);
-      else console.log(`[LOGGING] Delivery rate for Q${questionId}: ${deliveryRate.toFixed(1)}%`);
-    });
+      const actualResponses = await db
+        .select({ count: sql`count(*)` })
+        .from(responses)
+        .where(and(
+          eq(responses.questionId, questionId),
+          eq(responses.sessionId, sessionId)
+        ));  
+      const receivedCount = Number(actualResponses[0].count);
+      const deliveryRate = expectedResponses === 0 ? 0 : (receivedCount / expectedResponses) * 100;
+      const deliveryLogLine = `${new Date().toISOString()},${questionId},${expectedResponses},${receivedCount},${deliveryRate.toFixed(1)}%\n`;
+      fs.appendFile(deliveryLogPath, deliveryLogLine, (err) => {
+        if (err) console.error("[LOGGING] Failed to write delivery rate log:", err);
+        else console.log(`[LOGGING] Delivery rate for Q${questionId}: ${deliveryRate.toFixed(1)}%`);
+      });
 
-    return c.json({ message: "Question closed manually", questionId });
-});
-
-  
+      return c.json({ message: "Question closed manually", questionId });
+  });
 
   // API Endpoint: End Quiz – broadcasts an end-of-quiz message.
   app.post("/api/quiz/end", async (c) => {
@@ -1191,7 +1174,6 @@ app.post("/api/quiz/close-question", async (c) => {
         client.score = 0;
     }
 
-
     broker.publish({
       topic: "quiz/reset-quiz",
       payload: Buffer.from(JSON.stringify({ sessionId, message: "Quiz is reset" })),
@@ -1204,15 +1186,13 @@ app.post("/api/quiz/close-question", async (c) => {
         console.log("Published reset-quiz message successfully.");
       }
     });
-
-
     
     return c.json({ message: `Restart Quiz ${sessionId} with same questions` });
   });
 
-  
+  // -------------------- Server & TLS Setup --------------------
   const mqttPort = 8443; // Standard secure Websocket port
-  const webserverPort = 3001;
+  const webserverPort = 3001; // Port for HTTP API
   const tlsPort = 8883; // Standard secure MQTT port
 
   const tlsOptions = {
@@ -1243,12 +1223,12 @@ app.post("/api/quiz/close-question", async (c) => {
     return "127.0.0.1";
   }
 
+  // -------------------- Start HTTP & MQTT Servers --------------------
   // Start secure MQTT WebSocket server
   const httpsServer = createServer(broker, { ws: true, https: httpsOptions });
   httpsServer.listen(mqttPort, () => {
     console.log("WebSocket MQTT server running on port:", mqttPort);
   });
-
 
   // Start secure MQTT TCP server using TLS
   const tlsServer = tls.createServer(tlsOptions, broker.handle);
@@ -1265,8 +1245,7 @@ app.post("/api/quiz/close-question", async (c) => {
     console.error("[TLS] Error:", err);
   });
  
-
-  // HTTP Routes
+  // -------------------- HTTP Routes & Server --------------------
   app.get("/", (c) => {
     return c.text("Webserver & MQTT Server are running");
   });

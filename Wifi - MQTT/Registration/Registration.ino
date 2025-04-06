@@ -5,20 +5,20 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include "config.h"
-  
-Preferences preferences;
 
+// Create a Preferences object to store and retrieve credentials
+Preferences preferences;
 
 void setup() {
   M5.begin();
   Serial.begin(115200);
-  delay(2000); // Give serial time to connect
+  delay(2000);
   Serial.println("\n\n===== M5StickC Plus Device Registration =====");
   M5.Lcd.setRotation(3);
   M5.Lcd.fillScreen(BLACK);
   M5.Lcd.setTextSize(1);
   
-  // Initialize preferences
+  // Initialize preferences in non-readonly mode (so we can write credentials)
   preferences.begin("mqtt-creds", false);
   
   // Load WiFi configuration
@@ -68,21 +68,21 @@ void setup() {
   Serial.print("MAC Address (formatted): ");
   Serial.println(macAddress);
   
-  // Generate a device name
-  // String deviceName = "M5Stick-" + macAddress.substring(macAddress.length() - 6);
-  
   // Generate a random password
   String password = "Pass" + String(random(10000, 99999));
   
   // Register with server using HTTPS
   registerDevice(macAddress, PLAYER_NAME, password);
 }
-  
+
+//
+// Function: registerDevice
+// Description: Sends an HTTPS POST request to register the device on the server
+//
 void registerDevice(String macAddress, String playerName, String password) {
   M5.Lcd.setCursor(0, 36);
   M5.Lcd.print("Registering device...");
   
-  // Use HTTPS for secure connection
   String serverUrl = "https://";
   serverUrl += MQTT_SERVER;
   serverUrl += ":3001/api/register-device";
@@ -126,13 +126,14 @@ void registerDevice(String macAddress, String playerName, String password) {
   Serial.print("Response: ");
   Serial.println(response);
   
+  // If registration was successful, parse the response and save credentials
   if (httpCode == HTTP_CODE_OK) {
     // Parse the response
     StaticJsonDocument<256> respDoc;
     DeserializationError error = deserializeJson(respDoc, response);
     
     if (!error && respDoc["success"]) {
-      // Get the password from the response (server might have generated a different one)
+      // Use the server-provided password if available
       String serverPassword = respDoc.containsKey("password") ?
         respDoc["password"].as<String>() : password;
       
@@ -156,17 +157,21 @@ void registerDevice(String macAddress, String playerName, String password) {
       Serial.println("MAC: " + macAddress);
       Serial.println("Password: " + serverPassword);
     } else {
-      // Registration failed, save default credentials anyway for testing
+      // If registration failed, save default credentials (for testing)
       saveDefaultCredentials(macAddress, password);
     }
   } else {
-    // HTTP error, save default credentials anyway for testing
+    // If HTTP POST fails, save default credentials for testing purposes
     saveDefaultCredentials(macAddress, password);
   }
   
   http.end();
 }
-  
+
+//
+// Function: saveDefaultCredentials
+// Description: Saves the provided MAC address and password as default credentials in case of registration failure
+//
 void saveDefaultCredentials(String macAddress, String password) {
   preferences.putString("macAddress", macAddress);
   preferences.putString("password", password);
@@ -190,7 +195,8 @@ void saveDefaultCredentials(String macAddress, String password) {
   
 void loop() {
   M5.update();
-  
+
+  // When button A is pressed, display the saved credentials and registration complete message.
   if (M5.BtnA.wasPressed()) {
     M5.Lcd.fillScreen(BLACK);
     M5.Lcd.setCursor(0, 0);
