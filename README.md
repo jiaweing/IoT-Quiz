@@ -63,16 +63,6 @@ graph TD
     M -- "NTP Sync" --> NTP
 ```
 
-### BLE System Overview
-```mermaid
-graph TD
-    A["M5StickC Plus Devices<br/>BLE Peripherals"]-->|Time Sync| F["NTP Server"] 
-    A <-->|GATT Services| B["Central Server<br/>BLE Central and Quiz Management"]
-    B -->|SQL Queries via ORM| C["Database<br/>MySQL"]
-    B <-->|HTTPS API| D["Web Dashboard<br/>Teacher Interface"]
-    B -->|WSS| D
-```
-
 ### MQTT Quiz Session Flow
 
 ```mermaid
@@ -333,7 +323,13 @@ erDiagram
    # Rename generated files: "xx.pem" and "xx-key.pem" to "https.pem" and "http-key.pem"
    ```
 
-6. **Flash M5StickC Plus**
+6. **Register M5StickC Plus**
+   - Open `Wifi - MQTT/Registration/Registration.ino` in Arduino IDE
+   - Add the files `Wifi - MQTT/Registration/config.cpp` and `Wifi - MQTT/Registration/config.h` to the sketch
+   - Configure WiFi credentials and Player's Name on `Wifi - MQTT/Registration/config.cpp`
+   - Upload to device
+
+7. **Flash M5StickC Plus**
    - Open `Wifi - MQTT/client/client.ino` in Arduino IDE
    - Add the files `Wifi - MQTT/client/client.cpp` and `Wifi - MQTT/client/config.h` to the sketch
    - Configure WiFi credentials on `Wifi - MQTT/client/client.cpp`
