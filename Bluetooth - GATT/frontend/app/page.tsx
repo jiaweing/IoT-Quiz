@@ -172,11 +172,11 @@ export default function QuizHost() {
   const connectedClients = clients.map((client: ClientInfo) => ({
     ...client,
     score: client.score || 0,
-    authenticated: client.authenticated ?? false, // default value if missing
+    authorized: client.authorized ?? false, // default value if missing
   }));
 
-  const authenticatedClients = connectedClients.filter(client => client.authenticated);
-  const authenticatedClientsCount = connectedClients.filter(client => client.authenticated).length;
+  const authorizedClients = connectedClients.filter(client => client.authorized);
+  const authorizedClientsCount = connectedClients.filter(client => client.authorized).length;
   return (
     <GradientBackground className="flex flex-col items-center justify-center">
       <main className="w-full max-w-4xl p-6">
@@ -191,27 +191,38 @@ export default function QuizHost() {
           {step === Step.CONNECTED_PLAYERS && quizDetails && (
             <ConnectedPlayers
               expectedTapSequence={quizDetails?.tapSequence || ""}
-              clients={authenticatedClients}
+              clients={authorizedClients}
               isConnected={isConnected}
-              totalClients={authenticatedClientsCount}
+              totalClients={authorizedClientsCount}
               quizTitle={quizDetails.title}
               startSession={startSession}
               allowJoining={handleAllowJoining}
             />
           )}
 
-          {step === Step.QUESTION_PAGE && quizDetails && (
-            <QuestionPage
-              question={{
-                ...quizDetails.questions[currentQuestionIndex],
-                timestamp: broadcastQuestion?.timestamp,
-              }}
-              currentIndex={currentQuestionIndex}
-              totalQuestions={quizDetails.questions.length}
-              onNextQuestion={handleNextQuestion}
-              totalResponses={totalResponses}
-            />
-          )}
+            {step === Step.QUESTION_PAGE && quizDetails && sessionId && (() => {
+            // Get the current question from the quiz details
+            const currentQuestion = quizDetails.questions[currentQuestionIndex];
+            // Remove the original id property so we can override it
+            const { id: originalId, ...otherProps } = currentQuestion;
+            // Build the question object using broadcastQuestion.id if available
+            const questionWithId = {
+              ...otherProps,
+              id: broadcastQuestion?.id || originalId || `temp-${currentQuestionIndex}`,
+              timestamp: Number(broadcastQuestion?.timestamp || currentQuestion.timestamp),
+            };
+
+            return (
+              <QuestionPage
+                sessionId={sessionId}
+                question={questionWithId}
+                currentIndex={currentQuestionIndex}
+                totalQuestions={quizDetails.questions.length}
+                onNextQuestion={handleNextQuestion}
+                totalResponses={totalResponses}
+              />
+            );
+          })()} 
 
           {step === Step.ANSWER_REVEAL && quizDetails && (
             <AnswerReveal

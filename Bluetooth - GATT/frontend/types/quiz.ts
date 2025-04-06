@@ -1,6 +1,7 @@
 export interface QuizDetails {
   title: string;
   questions: {
+    id: string;
     questionText: string;
     answers: string[];
     correctAnswerIndex: number;
@@ -14,7 +15,7 @@ export interface QuizDetails {
 export interface Client {
   id: string;
   score: number;
-  authenticated: boolean;
+  authorized: boolean;
 }
 
 export interface LeaderboardEntry {

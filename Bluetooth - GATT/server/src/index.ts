@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 import { Hono } from "hono";
 import { eq, and, sql, desc } from "drizzle-orm";
 import { db } from "@/db/db.js"; // Adjust the path as needed
-import { sessions, questions, options, players, responses } from "@/db/schema.js";
+import { sessions, questions, options, players, responses} from "@/db/schema.js";
 
 // Import noble to act as a central device
 import noble from "@abandonware/noble";
@@ -61,7 +61,7 @@ interface ClientDevice {
   score: number;
   session?: string;
   name: string;
-  authenticated: boolean;
+  authorized: boolean;
 }
 
 // Store connected devices in a Map (keyed by peripheral.id)
@@ -71,6 +71,7 @@ const connectedClients = new Map<string, ClientDevice>();
 let activeSession: string | null = null; // Active quiz session
 let currentAnswerDistribution: { [key: string]: Set<string> } = { };
 const questionTimestamps = new Map<string, number>();
+const questionCloseTimeouts = new Map<string, NodeJS.Timeout>();
 
 let wss: WebSocketServer; // Will be assigned later
 
@@ -142,7 +143,7 @@ noble.on("discover", (peripheral) => {
               },
               score: 0,
               name: peripheral.advertisement.localName || peripheral.id,
-              authenticated: false,
+              authorized: false,
             };
             connectedClients.set(peripheral.id, device);
             console.log("Stored device:", device.id, "with characteristics:", Object.keys(device.characteristics));
@@ -181,7 +182,7 @@ function handleResponseData(device: ClientDevice, data: Buffer) {
     console.log("Received BLE response from", device.id, payload);
     
     if (payload.action === "join") {
-      if (activeSession === "active") {
+      if (activeSession != null) {
         console.log(`[SECURITY] Reject join from ${device.id} – quiz already started.`);
         return;
       }
@@ -202,10 +203,10 @@ function handleResponseData(device: ClientDevice, data: Buffer) {
             console.error(`[SECURITY] Invalid tap sequence from device ${device.id}.`);
             return;
           }
-          // Mark the device as authenticated and record the session
-          device.authenticated = true;
+          // Mark the device as authorized and record the session
+          device.authorized = true;
           device.session = sessionIdFromPayload;
-          broadcastWsMessage("clientInfo", { id: device.id, connected: true, authenticated: true });
+          broadcastWsMessage("clientInfo", { id: device.id, connected: true, authorized: true });
           broadcastWsMessage("clientCount", connectedClients.size);
           // Insert or update player record
           db.select()
@@ -335,8 +336,12 @@ function handleResponseData(device: ClientDevice, data: Buffer) {
             await db
               .update(players)
               .set({ score: device.score })
-              .where(eq(players.deviceId, device.id));
+              .where(and(
+                eq(players.deviceId, device.id),
+                eq(players.sessionId, activeSession as string)
+              ))
             broadcastWsMessage("score", { id: device.id, score: device.score });
+            updateCharacteristicOnAllClients("score", { id: device.id, score: device.score });
             currentAnswerDistribution[optionRecord.id].add(device.id);
             const distributionToPublish: { [key: string]: number } = {};
             const unionSet = new Set<string>();
@@ -431,9 +436,12 @@ function handleResponseData(device: ClientDevice, data: Buffer) {
               });
             }
             await db
-              .update(players)
-              .set({ score: device.score })
-              .where(eq(players.deviceId, device.id));
+            .update(players)
+            .set({ score: device.score })
+            .where(and(
+              eq(players.deviceId, device.id),
+              eq(players.sessionId, activeSession as string)
+            ))
             broadcastWsMessage("score", { id: device.id, score: device.score });
             // Update answer distribution for each submitted option.
             for (const [optId, clientSet] of Object.entries(currentAnswerDistribution)) {
@@ -648,6 +656,56 @@ app.get("/api/quiz/leaderboard", async (c) => {
     return c.json(leaderboard);
 });
 
+// API Endpoint: Manually close the current question (BLE version)
+app.post("/api/quiz/close-question", async (c) => {
+  // Parse sessionId and questionId from the request payload
+  const { sessionId, questionId } = await c.req.json();
+  if (!sessionId || !questionId) return c.text("Session ID and Question ID required", 400);
+
+  // If a timeout is pending for this question, cancel it and remove the handle
+  const timeoutHandle = questionCloseTimeouts.get(questionId);
+  if (timeoutHandle) {
+    clearTimeout(timeoutHandle);
+    questionCloseTimeouts.delete(questionId);
+  }
+
+  // Construct the payload for the question-closed notification
+  const closePayload = { questionId, closedAt: Date.now() };
+
+  // Update BLE devices by writing to the "questionClosed" characteristic
+  // (updateCharacteristicOnAllClients is a helper that writes data to a given BLE characteristic on all connected devices)
+  updateCharacteristicOnAllClients("questionClosed", closePayload);
+
+  console.log(`[BLE] Manually closed question: ${questionId}`);
+
+  // Compute delivery metrics by querying the DB for expected and actual responses
+  const playersInSession = await db
+    .select({ count: sql`count(*)` })
+    .from(players)
+    .where(eq(players.sessionId, sessionId));
+  const expectedResponses = Number(playersInSession[0].count);
+
+  const actualResponses = await db
+    .select({ count: sql`count(*)` })
+    .from(responses)
+    .where(and(
+      eq(responses.questionId, questionId),
+      eq(responses.sessionId, sessionId)
+    ));  
+  const receivedCount = Number(actualResponses[0].count);
+  const deliveryRate = expectedResponses === 0 ? 0 : (receivedCount / expectedResponses) * 100;
+
+  // Log the delivery rate to a file
+  const deliveryLogLine = `${new Date().toISOString()},${questionId},${expectedResponses},${receivedCount},${deliveryRate.toFixed(1)}%\n`;
+  fs.appendFile(deliveryLogPath, deliveryLogLine, (err) => {
+    if (err) console.error("[BLE LOGGING] Failed to write delivery rate log:", err);
+    else console.log(`[BLE LOGGING] Delivery rate for Q${questionId}: ${deliveryRate.toFixed(1)}%`);
+  });
+
+  // Return a JSON response indicating success
+  return c.json({ message: "Question closed manually", questionId });
+});
+
 // API Endpoint: End Quiz – broadcasts an end-of-quiz message.
 app.post("/api/quiz/end", async (c) => {
     const { sessionId } = await c.req.json();
@@ -661,6 +719,7 @@ app.post("/api/quiz/end", async (c) => {
     updateCharacteristicOnAllClients("question", {});
     broadcastWsMessage("sessionStatus", payload);
     console.log(`[QUIZ] End of quiz broadcast for session: ${sessionId}`);
+    activeSession = null;
     return c.json({ message: "Quiz ended", sessionId });
 });
 
@@ -676,8 +735,8 @@ app.post("/api/quiz/reset-quiz", async (c) => {
 
   // Filter connected devices that belong to the session and update their score property.
   connectedClients.forEach((device) => {
+    device.score = 0;
     if (device.session === sessionId && device.characteristics.score) {
-      device.score = 0;
       const payload = { id: device.id, score: 0 };
       device.characteristics.score.write(
         Buffer.from(JSON.stringify(payload)),
@@ -695,8 +754,6 @@ app.post("/api/quiz/reset-quiz", async (c) => {
 
   return c.json({ message: "Quiz scores reset", sessionId });
 });
-
-
 
 // --- Helper: Broadcast Current Question ---
 async function broadcastCurrentQuestion(sessionId: string, questionIndex: number = 0) {
@@ -752,7 +809,7 @@ async function broadcastCurrentQuestion(sessionId: string, questionIndex: number
     broadcastWsMessage("question", payload);
   
     // Broadcast question closed data shortly after (as in your original code)
-    setTimeout(async () => {
+    const timeoutHandle = setTimeout(async () => {
         const closePayload = { questionId: questionData.id, closedAt: Date.now() };
         updateCharacteristicOnAllClients("questionClosed", closePayload);
         console.log(`[QUIZ] Broadcasted question: ${questionData.id}`);
@@ -780,7 +837,10 @@ async function broadcastCurrentQuestion(sessionId: string, questionIndex: number
           if (err) console.error("[LOGGING] Failed to write delivery rate log:", err);
           else console.log(`[LOGGING] Delivery rate for Q${questionData.id}: ${deliveryRate.toFixed(1)}%`);
         });
+        questionCloseTimeouts.delete(questionData.id);
     }, 30000);
+
+    questionCloseTimeouts.set(questionData.id, timeoutHandle);
     
     console.log(`[QUIZ] Broadcasted question: ${questionData.id}`);
 }

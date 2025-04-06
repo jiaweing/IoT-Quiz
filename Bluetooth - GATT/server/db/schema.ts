@@ -104,3 +104,10 @@ export const responses = mysqlTable(
     uniqueResponse: primaryKey(table.questionId, table.playerId), // One response per question per player
   })
 );
+
+// Students Information
+export const students = mysqlTable("students", {
+  id: varchar("id", { length: 36 }).primaryKey(), // UUID
+  fullName: varchar("full_name", { length: 100 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});

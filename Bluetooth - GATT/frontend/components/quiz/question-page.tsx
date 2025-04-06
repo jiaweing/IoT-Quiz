@@ -2,12 +2,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { useEffect, useState } from "react";
-
+import { useEffect, useRef, useState } from "react";
+import { closeQuestion } from "@/app/actions";
 
 
 interface QuestionPageProps {
   question: {
+    id: string;
     questionText: string;
     answers: string[];
     // correctAnswerIndex: number;
@@ -15,6 +16,7 @@ interface QuestionPageProps {
     type?: "single_select" | "multi_select";
     timestamp: number;
   };
+  sessionId: string;
   currentIndex: number;
   totalQuestions: number;
   onNextQuestion: () => void;
@@ -23,6 +25,7 @@ interface QuestionPageProps {
 
 export function QuestionPage({
   question,
+  sessionId,
   currentIndex,
   totalQuestions,
   onNextQuestion,
@@ -32,7 +35,7 @@ export function QuestionPage({
   const maxTime = 30000; // 30 seconds in ms
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [expired, setExpired] = useState(false);
-
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
   // Update current time every 100ms
   useEffect(() => {
     const interval = setInterval(() => {
@@ -49,11 +52,36 @@ export function QuestionPage({
 
   // When time expires, trigger next question
   useEffect(() => {
+    intervalRef.current = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 100);
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, []);
+
+  // When time expires, trigger next question automatically
+  useEffect(() => {
     if (timeLeftMs <= 0 && !expired) {
       setExpired(true);
       onNextQuestion();
     }
   }, [timeLeftMs, expired, onNextQuestion]);
+
+   // Handler for "Show Correct Answer" button.
+   const handleShowCorrect = async () => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+    }
+    try {
+      await closeQuestion(sessionId, question.id);
+    } catch (error) {
+      console.error("Error closing question:", error);
+    }
+    setExpired(true);
+    onNextQuestion();
+  };
+
 
   return (
     <div className="space-y-6">
@@ -105,7 +133,7 @@ export function QuestionPage({
       </div>
 
       <div className="flex justify-end">
-        <Button size="lg" onClick={onNextQuestion}>
+        <Button size="lg" onClick={handleShowCorrect}>
           Show Correct Answer
         </Button>
       </div>

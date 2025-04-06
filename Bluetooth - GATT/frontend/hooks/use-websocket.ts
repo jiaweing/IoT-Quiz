@@ -57,7 +57,7 @@ export function useWebsocket() {
                 const exists = prev.find((c) => c.id === data.payload.id);
                 if (exists) {
                   return prev.map((c) =>
-                    c.id === data.payload.id ? { ...c, authenticated: data.payload.authenticated } : c
+                    c.id === data.payload.id ? { ...c, authorized: data.payload.authorized, name: data.payload.name } : c
                   );
                 }
                 return [...prev, data.payload];

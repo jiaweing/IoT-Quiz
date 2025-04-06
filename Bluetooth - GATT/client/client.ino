@@ -52,6 +52,7 @@ int cursorPosition = 0; // For multi-select cursor; the SUBMIT option is at inde
 
 String currentQuestionId = "";
 unsigned long long currentQuestionTimestamp = 0;
+int currentScore = 0;
 
 // BLE characteristic pointers
 NimBLECharacteristic* pAuthCharacteristic;
@@ -60,6 +61,7 @@ NimBLECharacteristic* pQuestionClosedCharacteristic;
 NimBLECharacteristic* pResponseCharacteristic;
 NimBLECharacteristic* pSessionStatusCharacteristic;
 NimBLECharacteristic* pTimeSyncCharacteristic;
+NimBLECharacteristic* pScoreCharacteristic;
 
 // ------------------ Display Helpers ------------------
 
@@ -264,11 +266,14 @@ class SessionStatusCallbacks : public NimBLECharacteristicCallbacks {
         selectedAnswer = 0;
         currentQuestionId = "";
         currentQuestionTimestamp = 0;
-        clearLine(2);
-        clearLine(3);
-        clearLine(4);
-        clearLine(5);
-        clearLine(6);
+        M5.Lcd.fillScreen(BLACK);
+        M5.Lcd.setCursor(0, 12);
+        M5.Lcd.print("Quiz Ended");
+        char buf[32];
+        snprintf(buf, sizeof(buf), "Final Score: %d", currentScore);
+        M5.Lcd.setCursor(0, 8 * 12);
+        M5.Lcd.print(buf);
+
         Serial.println("Quiz state reset due to Completed status");
       }
     } else {
@@ -299,9 +304,41 @@ class TimeSyncCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
+class ScoreCallbacks : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) override {
+    std::string value = pCharacteristic->getValue();
+    Serial.print("Score update written: ");
+    Serial.println(value.c_str());
+
+    StaticJsonDocument<200> scoreDoc;
+    DeserializationError err = deserializeJson(scoreDoc, value);
+    if (!err) {
+      int newScore = scoreDoc["score"] | 0;
+      currentScore = newScore;
+
+    } else {
+      Serial.print("Score parse error: ");
+      Serial.println(err.f_str());
+    }
+  }
+};
+
+
+
 // ------------------ BLE Setup ------------------
 
 void setupBLE() {
+  int xPos = M5.Lcd.width() - 15;
+
+  // Clear indicator area and show "BLE" with dots
+  M5.Lcd.fillRect(xPos, 0, 15, 15, BLACK);
+  clearLine(0);
+  M5.Lcd.setCursor(0, 0);
+  M5.Lcd.print("BLE");
+
+  // Set red indicator while initializing
+  M5.Lcd.fillRect(xPos, 0, 15, 15, RED);
+
   NimBLEDevice::init("M5StickCPlus Quiz Client");
   NimBLEServer* pServer = NimBLEDevice::createServer();
   NimBLEService* pService = pServer->createService(QUIZ_SERVICE_UUID);
@@ -346,6 +383,14 @@ void setupBLE() {
     NIMBLE_PROPERTY_READ | NIMBLE_PROPERTY_WRITE | NIMBLE_PROPERTY_NOTIFY
   );
   pTimeSyncCharacteristic->setCallbacks(new TimeSyncCallbacks());
+
+  // Score characteristic
+  pScoreCharacteristic = pService->createCharacteristic(
+    SCORE_CHARACTERISTIC_UUID,
+    NIMBLE_PROPERTY_READ | NIMBLE_PROPERTY_WRITE | NIMBLE_PROPERTY_NOTIFY
+  );
+  pScoreCharacteristic->setCallbacks(new ScoreCallbacks());
+
   
   pService->start();
   
@@ -355,7 +400,10 @@ void setupBLE() {
   scanRespData.setName("QuizService");
   pAdvertising->setScanResponseData(scanRespData);
   pAdvertising->start();
-  
+  clearLine(0);
+  logMessage("BLE OK!", 0);
+  M5.Lcd.fillRect(xPos, 0, 15, 15, GREEN);
+
   Serial.println("BLE Advertising started");
 }
 
