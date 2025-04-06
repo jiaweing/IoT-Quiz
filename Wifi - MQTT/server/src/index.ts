@@ -438,7 +438,7 @@ if (cluster.isPrimary) {
     console.log(`[WS] Client connected: ${client.id} from ${clientIp}`);
   });
 
-  broker.on("clientDisconnect", (client: AedesClient) => {
+  broker.on("clientDisconnect", (client: ExtendedAedesClient) => {
     connectedClients.delete(client.id);
     publishClientCount();
     broker.publish({
@@ -1188,9 +1188,7 @@ app.post("/api/quiz/close-question", async (c) => {
 
     // Reset in-memory scores
     for (const client of connectedClients.values()) {
-      if (client.session === sessionId) {
         client.score = 0;
-      }
     }
 
 

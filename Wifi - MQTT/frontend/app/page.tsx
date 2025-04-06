@@ -35,6 +35,7 @@ export default function QuizHost() {
     setBroadcastQuestion
   } = useMqtt();
 
+   // Local component state variables
   const [step, setStep] = useState<Step>(Step.CREATE_QUIZ);
   const [quizDetails, setQuizDetails] = useState<QuizDetails | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -42,6 +43,7 @@ export default function QuizHost() {
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(true);
 
+  // Calculate the total responses based on answer distribution and question type
   const totalResponses =
   answerDistribution && broadcastQuestion
     ? broadcastQuestion.type === "multi_select"
@@ -49,8 +51,9 @@ export default function QuizHost() {
       : Object.values(answerDistribution.distribution).reduce((sum, val) => sum + Number(val), 0)
     : 0;
 
+  // -------------------- HANDLERS --------------------
 
-  // Handle quiz creation
+  // Handle quiz creation, calling API actions and setting local state
   const handleCreateQuiz = async (details: QuizDetails) => {
     try {
       const formattedQuestions = details.questions.map(q => ({
@@ -74,7 +77,7 @@ export default function QuizHost() {
   };
 
 
-  // Start quiz session
+   // Start the quiz session by calling the start action and updating step
   const startSession = async () => {
     if (!sessionId || !quizDetails) return;
     try {
@@ -85,6 +88,7 @@ export default function QuizHost() {
     }
   };
 
+   // Allow clients to join the session by broadcasting the auth code
   const handleAllowJoining = async () => {
     if (!sessionId || !quizDetails) return;
     try {
@@ -95,13 +99,13 @@ export default function QuizHost() {
   };
 
 
-  // Handle showing answer
+  // Move to answer reveal step (after a question is answered)
   const handleNextQuestion = () => {
     if (!quizDetails) return;
     setStep(Step.ANSWER_REVEAL);
   };
 
-  // Handle next question or end quiz
+  // Handle moving to next question or ending the quiz if no questions remain
   const handleRevealNext = async () => {
     if (!sessionId || !quizDetails) return;
     const nextIndex = currentQuestionIndex + 1;
@@ -132,7 +136,8 @@ export default function QuizHost() {
   };
 
 
-  // Handle restarting quiz with same questions
+   // Handle restarting the quiz with the same questions:
+  // - Reset quiz state and call API actions to reset quiz on the server
   const handleRestartSame = async () => {
     if (!quizDetails || !sessionId) return;
     setClients((prev) =>
@@ -159,7 +164,7 @@ export default function QuizHost() {
     }
   };
 
-  // Handle starting new quiz
+   // Handle starting a completely new quiz session
   const handleRestartNew = () => {
     setQuizDetails(null);
     setSessionId(null);
@@ -173,20 +178,22 @@ export default function QuizHost() {
     setStep(Step.CREATE_QUIZ);
   };
 
-  // Transform ClientInfo[] to Client[] by ensuring score is a number
+   // Map client info to ensure default values are set and proper types are maintained
   const connectedClients = clients.map((client: ClientInfo) => ({
     ...client,
     score: client.score || 0,
     authorized: client.authorized ?? false, // default value if missing
     name: client.name
   }));
-
   const authorizedClients = connectedClients.filter(client => client.authorized);
   const authorizedClientsCount = connectedClients.filter(client => client.authorized).length;
+
+  // Render UI based on the current quiz step
   return (
     <GradientBackground className="flex flex-col items-center justify-center">
       <main className="w-full max-w-4xl p-6">
         <div className="w-full">
+          {/* Create Quiz Modal */}
           {showCreateModal && step === Step.CREATE_QUIZ && (
             <CreateQuizModal
               onClose={() => setShowCreateModal(false)}
@@ -194,6 +201,7 @@ export default function QuizHost() {
             />
           )}
 
+          {/* Connected Players Screen */}
           {step === Step.CONNECTED_PLAYERS && quizDetails && (
             <ConnectedPlayers
               expectedTapSequence={quizDetails?.tapSequence || ""}
@@ -206,6 +214,7 @@ export default function QuizHost() {
             />
           )}
 
+          {/* Question Page */}
           {step === Step.QUESTION_PAGE && quizDetails && sessionId && (() => {
             // Get the current question from the quiz details
             const currentQuestion = quizDetails.questions[currentQuestionIndex];
@@ -230,6 +239,7 @@ export default function QuizHost() {
             );
           })()} 
 
+          {/* Answer Reveal Screen */}
           {step === Step.ANSWER_REVEAL && quizDetails && (
             <AnswerReveal
               broadcastQuestion={broadcastQuestion}
@@ -239,6 +249,7 @@ export default function QuizHost() {
             />
           )}
 
+          {/* Leaderboard Screen */}
           {step === Step.LEADERBOARD && (
             <Leaderboard
               leaderboard={leaderboard}

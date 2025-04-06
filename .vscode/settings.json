@@ -1,10 +1,13 @@
 {
   "files.associations": {
+    ".fantomasignore": "ignore",
     "*.titan": "SourcePawn",
     "algorithm": "cpp",
     "limits": "cpp",
     "utility": "cpp",
-    "xutility": "cpp"
+    "xutility": "cpp",
+    "xlocale": "cpp",
+    "xstring": "cpp"
   },
   "postman.settings.dotenv-detection-notification-visibility": false
 }
