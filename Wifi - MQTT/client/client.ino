@@ -7,10 +7,8 @@
 #include <Preferences.h>
 #include "config.h"
 
-
-const char* mqtt_client_count_topic = "system/client_count";
-
 // MQTT topics
+const char* mqtt_client_count_topic = "system/client_count";
 const char* quiz_response_topic = "quiz/response";
 const char* quiz_join_topic = "quiz/session/join";
 const char* quiz_question_topic = "quiz/question";
@@ -21,14 +19,15 @@ const char* quiz_auth_topic = "quiz/auth";
 const char* quiz_end_topic = "quiz/end"; 
 const char* quiz_reset_topic = "quiz/reset-quiz"; 
 
-// Add these with your other global variables
- Preferences preferences;
- String deviceMac = "";
- String devicePassword = "";
+// Global variables
 
+// Credentials
+Preferences preferences;
+String deviceMac = "";
+String devicePassword = "";
 String mqtt_client_id = "";
 
-// Global variables
+// Quiz state variables
 String currentSessionId = "";
 String expectedTapSequence = "";  // Expected tap sequence from teacher.
 String joinSequenceInput = "";    // The sequence the student has tapped.
@@ -37,8 +36,7 @@ unsigned long long timeOffset = 0;
 bool questionActive = false;      // Indicates if a question is open.
 bool joinedSession = false;       // Indicates if this device has joined.
 
-
-// For questions/answers
+// Questions/ Answers Variables
 String optionIds[4];
 String optionTexts[4];
 int totalOptions = 0;
@@ -49,12 +47,14 @@ bool isMultiSelect = false;
 unsigned long long currentQuestionTimestamp = 0;
 int cursorPosition = 0; 
 const int maxOptionsPerPage = 7; 
-
 int currentScore = 0;
 
 // WiFiClient espClient;
 WiFiClientSecure espClient;
+// Create AsyncMqttClient instance
 PubSubClient client(espClient);
+
+// ---------------------- Utility Functions ----------------------
 
 void clearLine(int line) {
   int yPos = line * 12;
@@ -62,6 +62,13 @@ void clearLine(int line) {
   M5.Lcd.setCursor(0, yPos);
 }
 
+void logMessage(const char* msg, int line) {
+  clearLine(line);
+  M5.Lcd.setCursor(0, line * 12);
+  M5.Lcd.print(msg);
+}
+
+// ---------------------- Display Functions ----------------------
 void displayQuizPage() {
   
     M5.Lcd.fillScreen(BLACK);
@@ -122,12 +129,40 @@ void displayQuizPage() {
     }
 }
 
-void logMessage(const char* msg, int line) {
-  clearLine(line);
-  M5.Lcd.setCursor(0, line * 12);
-  M5.Lcd.print(msg);
+void displaySessionInfo() {
+  clearLine(2);
+  String s = "Session: " + currentSessionId;
+  M5.Lcd.setCursor(0, 2 * 12);
+  M5.Lcd.print(s);
+  // Also display expected tap sequence on line 3
+  // clearLine(3);
+  // String t = "TapSeq: " + expectedTapSequence;
+  // M5.Lcd.setCursor(0, 3 * 12);
+  // M5.Lcd.print(t);
+  // And display entered sequence on line 4
+  clearLine(4);
+  String j = "YourSeq: " + joinSequenceInput;
+  M5.Lcd.setCursor(0, 4 * 12);
+  M5.Lcd.print(j);
 }
-// Add functions to send answers
+
+void displayCurrentOption() {
+  clearLine(6);
+  String displayText;
+  
+  if (isMultiSelect) {
+    displayText = selectedOptions[selectedAnswer] ? "[X] " : "[ ] ";
+    displayText += optionTexts[selectedAnswer];
+  } else {
+    displayText = optionTexts[selectedAnswer];
+  }
+  
+  logMessage(displayText.c_str(), 6);
+}
+
+// ---------------------- MQTT Publish Functions ----------------------
+
+
 void sendSingleSelectAnswer() {
   char payload[256];
   snprintf(payload, sizeof(payload),
@@ -186,22 +221,8 @@ void sendMultiSelectAnswers() {
     M5.Lcd.fillRect(xPos, 0, 15, 15, RED);
   }
 }
-void displaySessionInfo() {
-  clearLine(2);
-  String s = "Session: " + currentSessionId;
-  M5.Lcd.setCursor(0, 2 * 12);
-  M5.Lcd.print(s);
-  // Also display expected tap sequence on line 3
-  // clearLine(3);
-  // String t = "TapSeq: " + expectedTapSequence;
-  // M5.Lcd.setCursor(0, 3 * 12);
-  // M5.Lcd.print(t);
-  // And display entered sequence on line 4
-  clearLine(4);
-  String j = "YourSeq: " + joinSequenceInput;
-  M5.Lcd.setCursor(0, 4 * 12);
-  M5.Lcd.print(j);
-}
+
+// ---------------------- Time Synchronization ----------------------
 
 // Synchronize system time using NTP
 void syncTime() {
@@ -222,19 +243,16 @@ unsigned long long getSynchronizedTime() {
   return millis() + timeOffset;
 }
 
-void displayCurrentOption() {
-  clearLine(6);
-  String displayText;
-  
-  if (isMultiSelect) {
-    displayText = selectedOptions[selectedAnswer] ? "[X] " : "[ ] ";
-    displayText += optionTexts[selectedAnswer];
-  } else {
-    displayText = optionTexts[selectedAnswer];
-  }
-  
-  logMessage(displayText.c_str(), 6);
+void printCurrentTime() {
+  time_t now = time(nullptr);  // get current time as Unix timestamp
+  struct tm *timeinfo = localtime(&now);
+  char buffer[30];
+  strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", timeinfo);
+  Serial.print("Current Time: ");
+  Serial.println(buffer);
 }
+
+// ---------------------- MQTT Callback & Reconnection ----------------------
 
 void callback(char* topic, byte* payload, unsigned int length) {
   char message[1024];  
@@ -249,7 +267,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     Serial.println(message);
   }
 
-  // Time sync
+ // Handle time sync
   if (strcmp(topic, time_sync_topic) == 0) {
     StaticJsonDocument<200> timeDoc;
     DeserializationError err = deserializeJson(timeDoc, message);
@@ -268,7 +286,6 @@ void callback(char* topic, byte* payload, unsigned int length) {
     currentSessionId = "";
     expectedTapSequence = "";
     joinSequenceInput = "";
-    M5.Lcd.fillScreen(BLACK);
     StaticJsonDocument<200> authDoc;
     DeserializationError err = deserializeJson(authDoc, message);
     if (err) {
@@ -276,7 +293,6 @@ void callback(char* topic, byte* payload, unsigned int length) {
       Serial.println(err.f_str());
       return;
     }
-    // Expect payload: {"sessionId": "...", "sessionName": "...", "tapSequence": "..."}
     String sessionIdFromAuth = authDoc["sessionId"].as<String>();
     String tapSeq = authDoc["tapSequence"].as<String>();
     expectedTapSequence = tapSeq;
@@ -285,13 +301,15 @@ void callback(char* topic, byte* payload, unsigned int length) {
     Serial.println(expectedTapSequence);
     Serial.print("Received session ID: ");
     Serial.println(currentSessionId);
-    displaySessionInfo();
+    if (!joinedSession) {
+      M5.Lcd.fillScreen(BLACK);
+      displaySessionInfo();
+    }
     return;
   }
 
-  // Handle session start (contains session name and expected tap sequence)
+  // Handle session start
   if (strcmp(topic, quiz_session_start_topic) == 0) {
-    // Parse JSON payload; expect {"sessionName": "Quiz123", "tapSequence": "ABBA"}
     StaticJsonDocument<200> sessionDoc;
     DeserializationError err = deserializeJson(sessionDoc, message);
     if (err) {
@@ -325,17 +343,13 @@ void callback(char* topic, byte* payload, unsigned int length) {
     uint64_t ts = doc["timestamp"].as<uint64_t>();
     currentQuestionTimestamp = ts;
 
-    // Log the type field
     String questionType = doc["type"].as<String>();
     Serial.print("Received question type: ");
     Serial.println(questionType);
 
-    // Set the isMultiSelect flag
     isMultiSelect = (questionType == "multi_select");
     Serial.print("isMultiSelect: ");
     Serial.println(isMultiSelect);
-
-    // isMultiSelect = doc["type"].as<String>() == "multi_select";
 
     Serial.print("Received question ID: ");
     Serial.println(currentQuestionId);
@@ -345,7 +359,6 @@ void callback(char* topic, byte* payload, unsigned int length) {
     for (int i = 0; i < 4; i++) {
       selectedOptions[i] = false;
     }
-
     
     totalOptions = 0;
     for (JsonObject option : doc["options"].as<JsonArray>()) {
@@ -362,7 +375,6 @@ void callback(char* topic, byte* payload, unsigned int length) {
     cursorPosition = 0;
     displayQuizPage();
     questionActive = true;
-  
     return;
   }
 
@@ -403,13 +415,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
     selectedAnswer = 0;
     currentQuestionId = "";
     currentQuestionTimestamp = 0;
+    joinSequenceInput = "";
     // Clear relevant display areas and show a default message
-    clearLine(2);
-    clearLine(3);
-    clearLine(4);
-    clearLine(5);
-    clearLine(6);
-    clearLine(7);
+    M5.Lcd.fillScreen(BLACK);
     M5.Lcd.setCursor(0, 12); 
     M5.Lcd.print("Quiz Ended");
     char buf[32];
@@ -420,7 +428,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     return;
   }
 
-  // Listen for the "reset-quiz" topic.
+   // Handle "reset-quiz" topic
   if (strcmp(topic, "quiz/reset-quiz") == 0) {
     Serial.println("Reset-quiz message received.");
     StaticJsonDocument<200> resetDoc;
@@ -430,10 +438,19 @@ void callback(char* topic, byte* payload, unsigned int length) {
       Serial.println(err.f_str());
       return;
     }
-    // Get the sessionId from the payload.
     String sessionIdFromReset = resetDoc["sessionId"].as<String>();
-    Serial.print("Reset session ID: ");
-    Serial.println(sessionIdFromReset);
+    currentSessionId = sessionIdFromReset;
+    clearLine(1);
+    clearLine(2);
+    clearLine(3);
+    clearLine(4);
+    clearLine(5);
+    clearLine(6);
+    clearLine(7);
+    clearLine(8);
+    M5.Lcd.fillScreen(BLACK);
+    displaySessionInfo();
+
     joinedSession = true;
     String joinPayload = String("{\"sessionId\":\"") + sessionIdFromReset + "\",\"auth\":\"" + expectedTapSequence + "\"}";
     Serial.print("Auto-join payload: ");
@@ -450,6 +467,8 @@ void callback(char* topic, byte* payload, unsigned int length) {
     return;
   }
 }
+
+// ---------------------- WiFi ----------------------
 
 void setup_wifi() {
   M5.Lcd.fillRect(120, 0, 15, 15, BLACK);
@@ -472,49 +491,7 @@ void setup_wifi() {
   M5.Lcd.fillRect(xPos, 0, 15, 15, GREEN);
 }
 
-void printCurrentTime() {
-  time_t now = time(nullptr);  // get current time as Unix timestamp
-  struct tm *timeinfo = localtime(&now);
-  char buffer[30];
-  strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", timeinfo);
-  Serial.print("Current Time: ");
-  Serial.println(buffer);
-}
-
-void reconnect() {
-  int xPos = M5.Lcd.width() - 15;
-  while (!client.connected()) {
-    logMessage("MQTT connecting...", 2);
-    Serial.println("Attempting MQTT connection with credentials:");
-    M5.Lcd.fillRect(xPos, 0, 15, 15, RED);
-    Serial.print("Client ID: ");
-    Serial.println(mqtt_client_id);
-    Serial.print("Username (MAC): ");
-    Serial.println(deviceMac);
-    Serial.print("Password length: ");
-    Serial.println(devicePassword.length());
-    if (client.connect(mqtt_client_id.c_str(), deviceMac.c_str(), devicePassword.c_str()) ) {
-      logMessage("MQTT OK!", 2);
-      M5.Lcd.fillRect(xPos, 0, 15, 15, GREEN);
-      client.subscribe(mqtt_client_count_topic, 1);
-      String scoreTopic = String("quiz/player/") + mqtt_client_id + "/score";
-      client.subscribe(scoreTopic.c_str(), 1);
-      client.subscribe(quiz_session_start_topic, 1);
-      client.subscribe(quiz_question_topic, 1);
-      client.subscribe(time_sync_topic, 1);
-      client.subscribe(quiz_question_closed_topic, 1);
-      client.subscribe(quiz_auth_topic, 1);
-      client.subscribe(quiz_end_topic, 1);
-      client.subscribe(quiz_reset_topic, 1);
-    } else {
-      char buf[32];
-      Serial.println(client.state());
-      snprintf(buf, sizeof(buf), "MQTT:%d", client.state());
-      logMessage(buf, 2);
-      delay(2000);
-    }
-  }
-}
+// ---------------------- Setup & Loop ----------------------
 
 void setup() {
   Serial.begin(115200);
@@ -560,6 +537,41 @@ void setup() {
   client.setKeepAlive(120);
 }
 
+void reconnect() {
+  int xPos = M5.Lcd.width() - 15;
+  while (!client.connected()) {
+    logMessage("MQTT connecting...", 2);
+    Serial.println("Attempting MQTT connection with credentials:");
+    M5.Lcd.fillRect(xPos, 0, 15, 15, RED);
+    Serial.print("Client ID: ");
+    Serial.println(mqtt_client_id);
+    Serial.print("Username (MAC): ");
+    Serial.println(deviceMac);
+    Serial.print("Password length: ");
+    Serial.println(devicePassword.length());
+    if (client.connect(mqtt_client_id.c_str(), deviceMac.c_str(), devicePassword.c_str()) ) {
+      logMessage("MQTT OK!", 2);
+      M5.Lcd.fillRect(xPos, 0, 15, 15, GREEN);
+      client.subscribe(mqtt_client_count_topic, 1);
+      String scoreTopic = String("quiz/player/") + mqtt_client_id + "/score";
+      client.subscribe(scoreTopic.c_str(), 1);
+      client.subscribe(quiz_session_start_topic, 1);
+      client.subscribe(quiz_question_topic, 1);
+      client.subscribe(time_sync_topic, 1);
+      client.subscribe(quiz_question_closed_topic, 1);
+      client.subscribe(quiz_auth_topic, 1);
+      client.subscribe(quiz_end_topic, 1);
+      client.subscribe(quiz_reset_topic, 1);
+    } else {
+      char buf[32];
+      Serial.println(client.state());
+      snprintf(buf, sizeof(buf), "MQTT:%d", client.state());
+      logMessage(buf, 2);
+      delay(2000);
+    }
+  }
+}
+
 void loop() {
   if (!client.connected()) {
     reconnect();
@@ -568,9 +580,8 @@ void loop() {
   M5.update();
   int xPos = M5.Lcd.width() - 15;
 
-  // Main page logic (existing code for joining session)
-  if (!joinedSession) {
-    // Use BtnA for "A", BtnB for "B".
+  // Joining session
+  if (!joinedSession) {// Use BtnA for "A", BtnB for "B".
     if (M5.BtnA.wasPressed()) {
       joinSequenceInput += "A";
       Serial.print("Tap input: ");
