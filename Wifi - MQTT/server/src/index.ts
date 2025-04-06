@@ -672,7 +672,10 @@ if (cluster.isPrimary) {
           await db
             .update(players)
             .set({ score: player.score })
-            .where(eq(players.studentId, player.studentId!));
+            .where(and(
+              eq(players.studentId, player.studentId!),
+              eq(players.sessionId, activeSession as string)
+            ));
           
           broker.publish({
             topic: `quiz/player/${client.id}/score`,
@@ -704,7 +707,6 @@ if (cluster.isPrimary) {
         }
       }
       
-      // Process multi-select submissions as one submission.
       if (answerObj.optionId) {
         // Single-select: process one optionId.
         processResponse(answerObj.optionId);
@@ -793,7 +795,14 @@ if (cluster.isPrimary) {
             pointsAwarded: exactMatch ? pointsAwarded : 0,
           });
         }
-        await db.update(players).set({ score: player.score }).where(eq(players.studentId, player.studentId!));
+
+        await db
+            .update(players)
+            .set({ score: player.score })
+            .where(and(
+              eq(players.studentId, player.studentId!),
+              eq(players.sessionId, activeSession as string)
+            ));
         
         broker.publish({
           topic: `quiz/player/${client.id}/score`,
@@ -1162,13 +1171,27 @@ app.post("/api/quiz/close-question", async (c) => {
 
     const sessionPlayers = await db.select().from(players).where(eq(players.sessionId, sessionId));
     sessionPlayers.forEach((p) => {
-      broker.publish({
-        topic: `quiz/player/${p.id}/score`,
-        payload: Buffer.from(JSON.stringify({ id: p.id, score: 0 })),
-        qos: 1,
-        client: { id: "server_authorized" }
-      });
+    // Look up the client by studentId
+      const matchingClient = Array.from(connectedClients.values()).find(
+        (client) => client.studentId === p.studentId && client.session === sessionId
+      );
+
+      if (matchingClient) {
+        broker.publish({
+          topic: `quiz/player/${matchingClient.id}/score`,
+          payload: Buffer.from(JSON.stringify({ id: matchingClient.id, score: 0 })),
+          qos: 1,
+          client: { id: "server_authorized" },
+        });
+      }
     });
+
+    // Reset in-memory scores
+    for (const client of connectedClients.values()) {
+      if (client.session === sessionId) {
+        client.score = 0;
+      }
+    }
 
 
     broker.publish({
@@ -1183,6 +1206,8 @@ app.post("/api/quiz/close-question", async (c) => {
         console.log("Published reset-quiz message successfully.");
       }
     });
+
+
     
     return c.json({ message: `Restart Quiz ${sessionId} with same questions` });
   });

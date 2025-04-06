@@ -135,7 +135,12 @@ export default function QuizHost() {
   // Handle restarting quiz with same questions
   const handleRestartSame = async () => {
     if (!quizDetails || !sessionId) return;
-    
+    setClients((prev) =>
+      prev.map((client) => ({
+        ...client,
+        score: 0
+      }))
+    );
     setCurrentQuestionIndex(0);
     setLeaderboard([]);
     setAnswerDistribution({ distribution: {}, uniqueRespondents: 0 });
